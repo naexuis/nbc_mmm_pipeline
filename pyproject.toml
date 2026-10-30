@@ -1,0 +1,45 @@
+[project]
+name = "nbc-mmm-pipeline"
+version = "1.0.0.dev0"
+description = "MMM pipeline for Universal Pictures"
+requires-python = ">=3.10,<3.13"
+
+dependencies = [
+    "google-auth>=2.43,<3",
+    "google-cloud-bigquery>=3.40,<4",
+    "google-cloud-storage>=3.10,<4",
+    "numpy>=1.26,<2",
+    "pandas>=2.2,<3",
+    "openpyxl>=3.1,<4",
+    "pyarrow>=23,<24",
+    "playwright>=1.62,<2",
+    "rapidfuzz>=3.14,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "ruff>=0.16,<0.17",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mmm_dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra -m 'not bq'"
+markers = [
+    "bq: touches BigQuery/GCS in the dev dataset; run in Domino only (pytest -m bq tests/bq)",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
