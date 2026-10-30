@@ -24,6 +24,26 @@ DATASET_MODEL = "us_hment_mmm_model"  # versioned model-ready panels
 MEDIA_BUCKET = "nbcuni-media-ocean"
 MEDIA_ROOT_PREFIX = "nbcuni-media-ocean/"
 
+# Advertiser codes: ZUE = UP Home Ent, ZFF/ZFE = Focus, ZUV = MVPD. (ZUP = theatrical, excluded.)
+# Prisma folders that belong to US Home Entertainment.
+MEDIA_PRISMA_FOLDERS = ("nbc-zue", "nbc-zff", "nbc-zfe")
+# Mediaocean folder (holds every client; US HE rows are filtered later, in the core layer).
+MEDIA_MEDIAOCEAN_FOLDER = "nbc-netpak-spotpak"
+
+# File type (token in the file name) -> raw table name.
+MEDIA_PRISMA_TYPES = {
+    "PrismaCampaigns": "prisma_campaigns",
+    "PrismaPlacements": "prisma_placements",
+    "PrismaAdvancedPlacementDetails": "prisma_advanced_placement_details",
+    "PrismaPlacementBuys": "prisma_placement_buys",
+}
+MEDIA_MEDIAOCEAN_TYPES = {
+    "MediaoceanNetPak": "mediaocean_netpak",
+    "MediaoceanSpotPak": "mediaocean_spotpak",
+}
+# How many snapshot dates to keep in each raw media table.
+MEDIA_KEEP_SNAPSHOTS = 3
+
 # ---- Revenue source (exported by hand from NBC GCP) ------------------------
 REVENUE_BUCKET = "nbcu-marcus-hilliard"
 REVENUE_US_PREFIX = "hment_rev_usa/"

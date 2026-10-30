@@ -306,6 +306,7 @@ def show_raw_table_summary():
 def show_recent_loads(n: int = 5):
     """Readable version of recent_loads() for notebooks."""
     return styled(recent_loads(n), counts=["rows_loaded", "file_count"], times=["finished_at"],
+                  decimals={"size_gb": 2},
                   labels={"finished_at": "Finished (Central)", "delivery": "Delivery",
                           "status": "Status", "rows_loaded": "Rows", "file_count": "Files",
                           "size_gb": "Size (GB)", "message": "Message"})
