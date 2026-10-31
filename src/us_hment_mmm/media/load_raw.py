@@ -42,7 +42,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
 from us_hment_mmm import config, registry
-from us_hment_mmm.display import styled
+from us_hment_mmm.display import table_or_note
 from us_hment_mmm.gcp import bq_client, gcs_client
 
 SNAPSHOT_SOURCE = "media_snapshot"
@@ -336,7 +336,8 @@ def raw_media_summary():
 
 
 def show_raw_media_summary():
-    return styled(raw_media_summary(), counts=["rows_"],
+    return table_or_note(raw_media_summary(),
+                  "No media loaded yet. This is normal before the first load.", counts=["rows_"],
                   labels={"table_name": "Table", "_snapshot_date": "Snapshot",
                           "_source_folder": "Folder", "rows_": "Rows"})
 

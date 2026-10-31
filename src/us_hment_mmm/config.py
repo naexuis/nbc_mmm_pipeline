@@ -61,6 +61,61 @@ REVENUE_REQUIRED_COLUMNS = (
     "royalty_total_usd",
 )
 
+# ---- Reference CSVs copied by hand from NBC GCP (one dated file per copy) ---
+# Each source: folder in REVENUE_BUCKET, file-name pattern (date in group 1), raw table,
+# required columns, and how many copies to keep.
+REFERENCE_SOURCES = {
+    "enrichment_title": {
+        "bucket": "nbcu-marcus-hilliard",
+        "prefix": "enrichments_table_stage/",
+        "pattern": r"^(\d{8})_enrichments_title\.csv$",
+        "table": "nbc_enrichment_title",
+        "required": ("imdb_id", "title_name", "studio_distributor", "us_widest_release_date",
+                     "us_pvod_start_date", "us_est_date"),
+        "keep": 3,
+        "description": "NBC enrichment title table (titles, distributor, genre, window dates)",
+    },
+    "std_chtt": {
+        "bucket": "nbcu-marcus-hilliard",
+        "prefix": "std_chtt_table_stage/",
+        "pattern": r"^he_ent_std_chtt_(\d{8})\.csv$",
+        "table": "finance_std_chtt",
+        "required": ("imdb_id", "title_name", "premium_release_date", "est_release_date",
+                     "total_digital_premium_revenue"),
+        "keep": 6,
+        "description": "NBC Finance Standard CHTT (Finance window dates and premium revenue)",
+    },
+}
+
+# ---- Sharded CSV sources (dated folder of export shards) ---------------------
+REVENUE_SPEC = {
+    "source": "revenue_usa",
+    "label": "REVENUE LOAD",
+    "description": "US HE digital POS revenue (royalty and retail, by sale)",
+    "bucket": REVENUE_BUCKET,
+    "prefix": REVENUE_US_PREFIX,
+    "table": REVENUE_RAW_TABLE,
+    "required": REVENUE_REQUIRED_COLUMNS,
+    "keep": REVENUE_KEEP_DELIVERIES,
+    "date_col": "transaction_date", "amount_col": "royalty_total_usd",
+    "first_label": "First sale", "last_label": "Last sale", "amount_label": "Royalty (USD)",
+}
+
+# US cinema box office (Comscore daily gross per theater and title), copied by hand.
+# Opening weekend = release day (Thursday or Friday) through Sunday, inclusive.
+BOX_OFFICE_SPEC = {
+    "source": "box_office_usa",
+    "label": "BOX OFFICE LOAD",
+    "description": "US cinema box office, daily gross per theater and title (Comscore)",
+    "bucket": "nbcu-marcus-hilliard",
+    "prefix": "up_bo_usa/",
+    "table": "box_office_usa",
+    "required": ("imdb_id", "title_name", "release_date", "tracking_date", "day_rev_usd"),
+    "keep": 2,
+    "date_col": "tracking_date", "amount_col": "day_rev_usd",
+    "first_label": "First day", "last_label": "Last day", "amount_label": "Box office (USD)",
+}
+
 # ---- Run log ---------------------------------------------------------------
 # One row per load attempt (any source), kept in the raw dataset.
 LOAD_REGISTRY_TABLE = "load_registry"

@@ -33,3 +33,12 @@ def styled(df: pd.DataFrame, *, counts: list[str] = (), money: list[str] = (),
         fmt = {labels.get(k, k): v for k, v in fmt.items()}
         out = out.rename(columns=labels)
     return out.style.format(fmt).hide(axis="index")
+
+
+def table_or_note(df: pd.DataFrame, note: str, **kwargs):
+    """Styled table, or a friendly note (instead of an empty table) when there are no rows."""
+    if df is None or df.empty:
+        from IPython.display import Markdown
+
+        return Markdown(f"ℹ️ {note}")
+    return styled(df, **kwargs)
