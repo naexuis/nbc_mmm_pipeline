@@ -90,6 +90,7 @@ known_hosts
 # Pipeline runtime / generated output
 # =============================================================================
 
+diagnostics/
 logs/
 tmp/
 temp/
