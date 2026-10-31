@@ -1,0 +1,253 @@
+{
+ "_about": "One-time corrections applied when seeding the title tables from the JSON dictionaries (decided 2026-10-30). After seeding, all changes go through the review notebook.",
+ "title_name": {
+  "tt31036941": {
+   "value": "JURASSIC WORLD REBIRTH",
+   "reason": "Spelling correction"
+  }
+ },
+ "pvod_date": {
+  "tt37287335": {
+   "value": "2026-06-30",
+   "reason": "Official PVOD date confirmed by Marcus 2026-10-30"
+  }
+ },
+ "in_mmm": {
+  "tt8760708": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt15679400": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt14209916": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt12427158": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt6718170": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt11358390": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt5433140": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt27155038": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt1001520": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt15153532": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt12921446": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt14849194": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt14362112": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt6495056": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt9682428": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt21188080": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt19356262": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt21692408": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt30007864": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt9214772": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt24244436": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt7738330": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt27489557": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt1684562": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt21454134": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt7510222": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt23468836": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt12584954": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt30319503": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt15685360": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt32356994": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt27534307": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt29623480": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt30840929": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt31064841": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt20215234": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt5040012": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt4216984": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt10954718": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt21442114": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt30788842": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt22022784": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt30988739": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt32461003": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt13652142": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt31314296": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt27674982": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt32149847": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt27674700": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt30840798": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt26743210": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt26342662": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt31036941": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt26843513": {
+   "value": true,
+   "reason": "In the current 54-title model database (MMM Model Overview deck)"
+  },
+  "tt1798632": {
+   "value": false,
+   "reason": "Day-and-date release with Peacock"
+  },
+  "tt10665342": {
+   "value": false,
+   "reason": "Day-and-date release with Peacock"
+  },
+  "tt15398776": {
+   "value": false,
+   "reason": "No premium window"
+  },
+  "tt15009428": {
+   "value": false,
+   "reason": "Distributed by Apple; no traditional premium window"
+  },
+  "tt4589218": {
+   "value": false,
+   "reason": "Normally excluded from MMM"
+  }
+ }
+}

@@ -30,6 +30,10 @@ MEDIA_PRISMA_FOLDERS = ("nbc-zue", "nbc-zff", "nbc-zfe")
 # Mediaocean folder (holds every client; US HE rows are filtered later, in the core layer).
 MEDIA_MEDIAOCEAN_FOLDER = "nbc-netpak-spotpak"
 
+# Business code -> business group used to read product codes (codes are unique within a group).
+# ZUV (MVPD, in Mediaocean) buys for UP Home Ent titles with UP Home Ent codes.
+MEDIA_BUSINESS_GROUPS = {"ZUE": "UP_HE", "ZUV": "UP_HE", "ZFF": "FOCUS", "ZFE": "FOCUS"}
+
 # File type (token in the file name) -> raw table name.
 MEDIA_PRISMA_TYPES = {
     "PrismaCampaigns": "prisma_campaigns",
@@ -115,6 +119,15 @@ BOX_OFFICE_SPEC = {
     "date_col": "tracking_date", "amount_col": "day_rev_usd",
     "first_label": "First day", "last_label": "Last day", "amount_label": "Box office (USD)",
 }
+
+# ---- Title reference (core layer; changed only through the review notebook) ----
+TITLE_TABLE = "title"                  # one row per film, keyed on IMDb ID
+TITLE_ALIAS_TABLE = "title_alias"      # product codes (media) and product IDs (revenue) -> film
+TITLE_HISTORY_TABLE = "title_history"  # every change: who, when, why, old -> new
+# Domino dataset folder for title review workbooks, with subfolders:
+#   issued/    new workbooks to download    returned/  filled-in workbooks to upload
+#   imported/  workbooks already saved to BigQuery
+REVIEW_DIR = "/domino/datasets/local/nbcu_mmm_dev/us_hment_mmm/review/titles"
 
 # ---- Run log ---------------------------------------------------------------
 # One row per load attempt (any source), kept in the raw dataset.
