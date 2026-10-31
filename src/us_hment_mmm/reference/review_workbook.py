@@ -41,9 +41,12 @@ DECISION_MAP = {"accept": "approve", "use my answer": "use instead", "keep as is
 REVIEW_TABS = {
     1: ("1 · Product codes",
         "These media product codes are not linked to any film, so their spend is not counted for "
-        "a film. For each row: choose Accept to use the proposed fix, or choose Use my answer and "
-        "type the film's IMDb ID (or non_film for drafting, anniversary or brand campaigns) under "
-        "Your answer. Keep as is leaves the code unlinked. Leave Decision empty to decide later.",
+        "a film. For each row choose one: Accept uses the proposed fix. Use my answer uses what "
+        "you type under Your answer: the film's IMDb ID (like tt1234567), or non_film. "
+        "Keep as is leaves the code unlinked. Leave Decision empty to decide later.\n"
+        "non_film = the code is not a film (drafting/draft, anniversary, brand or TV campaigns); "
+        "its spend is kept but never counted for a film. It replaces the old tt00000000.\n"
+        "If the film is not on the Films now tab, also add it on the Add films tab.",
         [("Business", "business", 13), ("Code", "code", 8), ("Name in Prisma", "name", 26),
          ("Media rows", "rows", 11), ("Proposed fix", "proposed", 46), ("Why", "why", 46),
          ("Decision", "decision", 15), ("Your answer (IMDb ID or non_film)", "answer", 22),
@@ -68,11 +71,14 @@ REVIEW_TABS = {
         CHOICES),
     4: ("4 · Revenue product IDs",
         "NBC's revenue data tags these product IDs with a film, but they are not linked yet, so "
-        "their revenue is not counted for the film. Accept links them. Use my answer lets you "
-        "type a different IMDb ID. Keep as is leaves them unlinked.",
-        [("Product ID", "product_id", 13), ("Royalty (USD)", "royalty", 15),
-         ("Proposed fix", "proposed", 50), ("Why", "why", 40), ("Decision", "decision", 15),
-         ("Your answer (IMDb ID)", "answer", 18), ("Reason", "reason", 40)],
+        "their revenue is not counted for the film. Check that the name in revenue is that film "
+        "(not a bundle or a different film), then choose Accept to link them. Use my answer lets "
+        "you type a different IMDb ID. Keep as is leaves them unlinked.",
+        [("Product ID", "product_id", 12), ("Name in revenue", "revenue_name", 34),
+         ("Royalty (USD)", "royalty", 14), ("Sales", "sales", 24),
+         ("NBC tags it as", "tagged", 34), ("Proposed fix", "proposed", 40), ("Why", "why", 46),
+         ("Decision", "decision", 15), ("Your answer (IMDb ID)", "answer", 18),
+         ("Reason", "reason", 40)],
         CHOICES),
 }
 INPUT_FIELDS = {"decision", "answer", "reason"}
@@ -94,8 +100,9 @@ HAND_TABS = {
                       ("New value", "new_value", 30), ("Reason", "reason", 40)]),
     "Map codes": ("map_codes",
                   "Link any media product code to a film by hand, including one that is already "
-                  "linked to the wrong film. Business code is ZUE, ZUV, ZFF or ZFE; Film is an "
-                  "IMDb ID or non_film.",
+                  "linked to the wrong film. Business code is ZUE, ZUV, ZFF or ZFE. Film is an "
+                  "IMDb ID, or non_film when the code is not a film (drafting, anniversary, brand "
+                  "or TV campaigns; replaces the old tt00000000).",
                   [("Business code", "business_code", 14), ("Product code", "product_code", 14),
                    ("Film (IMDb ID or non_film)", "film", 26), ("Reason", "reason", 40)]),
     "Map product IDs": ("map_product_ids",
@@ -117,6 +124,15 @@ READ_ME = [
     "     workbook again.",
     "  4. Save as .xlsx, upload it to the 'returned' folder, and run notebook 05_Review_Titles.",
     "",
+    "NON_FILM",
+    "  Type non_film for a product code that is not a film: drafting/draft, anniversary,",
+    "  brand or TV campaigns. Its spend is kept but never counted for a film. non_film",
+    "  replaces the old tt00000000 placeholder (tt00000000 is also understood).",
+    "",
+    "NEW FILMS",
+    "  When you link a code or product ID to a film that is not on the Films now tab, also",
+    "  add the film on the Add films tab (or the check run will ask you to).",
+    "",
     "THE TABS",
     "  1 · Product codes        media codes not linked to a film",
     "  2 · Flagged films        films with a problem found when the title table was built",
@@ -137,7 +153,7 @@ def _banner_and_header(ws, banner: str, cols):
     c = ws.cell(row=1, column=1)
     c.fill, c.font = BANNER_FILL, Font(size=11)
     c.alignment = Alignment(wrap_text=True, vertical="top")
-    ws.row_dimensions[1].height = 62
+    ws.row_dimensions[1].height = 15 * (banner.count("\n") + 1) + 45
     for j, (name, _field, width) in enumerate(cols, start=1):
         h = ws.cell(row=2, column=j, value=name)
         h.font, h.fill = Font(bold=True, color="FFFFFF"), HEADER_FILL

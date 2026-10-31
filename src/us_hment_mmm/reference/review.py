@@ -159,6 +159,22 @@ def suggest_for_code(sample_name: str, tags, titles: dict,
                         "type its IMDb ID, or non_film if it is not a film")
 
 
+BUNDLE_RE = re.compile(r"COLLECTION|BUNDLE|\bPACK\b|TRILOGY|DOUBLE FEATURE|\bBOX SET|"
+                       r"\b\d+[- ]?(FILM|MOVIE)\b| \+ | / ", re.IGNORECASE)
+
+
+def suggest_for_pid(name: str | None, imdb: str, titles: dict) -> tuple[bool, str]:
+    """Should NBC's IMDb tag on a revenue product ID be proposed? Returns (propose, why)."""
+    film = titles[imdb]["title_name"]
+    if name and BUNDLE_RE.search(name):
+        return False, ("the revenue name looks like a bundle or collection; linking it would give "
+                       f"all of its revenue to {film}. Keep as is unless you are sure")
+    if name and not names_agree(name, film):
+        return False, (f"NBC tags it with {film} ({imdb}), but the revenue name does not match; "
+                       "check which film it is")
+    return True, "NBC's revenue data tags these sales with this IMDb ID, and the names match"
+
+
 def date_differences(titles: dict, enrichment: dict, chtt: dict) -> list[dict]:
     """Dates where NBC or Finance has a value that differs from the approved one."""
     out = []
@@ -234,11 +250,16 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
              "now": d["current"] or "(none)", "proposed": d["new"], "source": d["source"]})
     for p in sorted(pids, key=lambda p: -(p["royalty"] or 0)):
         name = titles[p["imdb_id"]]["title_name"]
-        add(4, f"pid|{p['product_id']}", "not mapped", f"{name} ({p['imdb_id']})",
-            "NBC's revenue data tags these sales with this IMDb ID",
-            {"product_id": p["product_id"], "imdb_id": p["imdb_id"], "label": name},
+        propose, why = suggest_for_pid(p.get("name"), p["imdb_id"], titles)
+        add(4, f"pid|{p['product_id']}", "not mapped",
+            f"{name} ({p['imdb_id']})" if propose else None, why,
+            {"product_id": p["product_id"], "imdb_id": p["imdb_id"] if propose else None,
+             "label": name},
             {"label": f"Product ID {p['product_id']}", "product_id": p["product_id"],
-             "royalty": round(p["royalty"] or 0), "proposed": f"Link to {name} ({p['imdb_id']})"})
+             "revenue_name": p.get("name"), "royalty": round(p["royalty"] or 0),
+             "sales": f"{p.get('first_sale') or '?'} to {p.get('last_sale') or '?'}",
+             "tagged": f"{name} ({p['imdb_id']})",
+             "proposed": f"Link to {name} ({p['imdb_id']})" if propose else NO_PROPOSAL})
     return items
 
 
@@ -384,7 +405,8 @@ class Plan:
         code, film = text(code).upper(), text(film)
         if not code:
             self.problem("the product code is blank")
-        elif film.lower() in ("non_film", "non-film", "nonfilm"):
+        elif film.lower() in ("non_film", "non-film", "nonfilm", "non film") \
+                or re.fullmatch(r"tt0+", film.lower()):   # the old tt00000000 placeholder
             self._map("media_product_code", g, code, "non_film", None, label or code)
         elif not IMDB_RE.match(film):
             self.problem(f"'{film}' should be an IMDb ID like tt1234567 or non_film")
@@ -611,7 +633,9 @@ def _read_unmapped_pids(client, titles, aliases):
     t = config.REVENUE_RAW_TABLE
     sql = f"""
         SELECT CAST(product_id1 AS STRING) AS product_id, ANY_VALUE(imdb_title_id) AS imdb_id,
-               SUM(SAFE_CAST(royalty_total_usd AS FLOAT64)) AS royalty
+               SUM(SAFE_CAST(royalty_total_usd AS FLOAT64)) AS royalty,
+               APPROX_TOP_COUNT(reported_product_name, 1)[SAFE_OFFSET(0)].value AS name,
+               MIN(transaction_date) AS first_sale, MAX(transaction_date) AS last_sale
         FROM `{_raw(t)}`
         WHERE {_latest(t)} AND imdb_title_id IN UNNEST(@ids)
         GROUP BY 1

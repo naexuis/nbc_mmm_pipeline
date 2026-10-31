@@ -349,3 +349,32 @@ def test_explain_note_is_plain_english():
     text_ = R.explain_note("IMDb ID also used for: SHOOTING STARS. Check which name is right.")
     assert "SHOOTING STARS" in text_ and "Resolved" in text_
     assert R.explain_note("something else") == "something else"
+
+
+def test_suggest_for_pid_bundles_and_mismatches():
+    assert R.suggest_for_pid("Wicked (2024)", "tt1262426", TITLES)[0] is True
+    assert R.suggest_for_pid(None, "tt1262426", TITLES)[0] is True
+    ok, why = R.suggest_for_pid("Wicked 2-Movie Collection", "tt1262426", TITLES)
+    assert ok is False and "bundle" in why
+    ok, why = R.suggest_for_pid("Twisters", "tt1262426", TITLES)
+    assert ok is False and "does not match" in why
+
+
+def test_pid_without_proposal_needs_an_answer():
+    pids = [{"product_id": "555", "imdb_id": "tt1262426", "royalty": 9.0,
+             "name": "Wicked 2-Movie Collection", "first_sale": "2025-01-01",
+             "last_sale": "2026-10-29"}]
+    items = R.build_items([], TITLES, ENRICH, [], pids)
+    it = next(i for i in items if i["section"] == 4)
+    assert it["has_suggestion"] is False and it["show"]["sales"] == "2025-01-01 to 2026-10-29"
+    p = R.plan_from_workbook({"review": [_row(it, 3, "approve")]}, items, TITLES, ALIASES, ENRICH)
+    assert "no proposed fix" in p.problems[0]
+
+
+def test_old_placeholder_means_non_film():
+    p = R.plan_from_workbook({"map_codes": [{"row": 3, "business_code": "ZUE", "product_code": "M2D",
+                                             "film": "tt00000000", "reason": "draft"}]},
+                             [], TITLES, ALIASES, ENRICH)
+    assert p.problems == []
+    got = {c["field"]: c["new"] for c in p.changes}
+    assert got == {"category": "non_film"}          # imdb_id stays empty
