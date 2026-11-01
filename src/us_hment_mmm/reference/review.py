@@ -40,6 +40,9 @@ from us_hment_mmm.reference import titles as T
 IMDB_RE = re.compile(r"^tt\d{7,9}$")
 NON_FILM_RE = re.compile(r"DRAFT|DRFT|ANNIV|\b\d{2,3}(ST|ND|RD|TH)\b|BRAND|CATALOG", re.IGNORECASE)
 DATE_FIELDS = ("release_date", "pvod_date", "est_date")
+# Dates before this year are placeholders, not real dates (e.g. 1899-12-30 is how a blank or
+# zero comes out of Excel, which Finance's CHTT uses for "no premium window").
+MIN_YEAR = 1950
 SETTABLE_FIELDS = ("title_name", "distributor", "release_date", "pvod_date", "est_date",
                    "in_mmm", "review_note")
 FIELD_LABELS = {"release_date": "Release", "pvod_date": "PVOD", "est_date": "EST"}
@@ -63,17 +66,18 @@ def parse_date(value) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value.date().isoformat()
+        value = value.date()
     if isinstance(value, date):
-        return value.isoformat()
+        return value.isoformat() if value.year >= MIN_YEAR else None
     s = str(value).strip()
     if not s or s in T.EMPTY_VALUES:
         return None
     for fmt, text in (("%Y-%m-%d", s[:10]), ("%m/%d/%Y", s.split()[0]), ("%Y%m%d", s)):
         try:
-            return datetime.strptime(text, fmt).date().isoformat()
+            d = datetime.strptime(text, fmt).date()
         except ValueError:
             continue
+        return d.isoformat() if d.year >= MIN_YEAR else None
     return None
 
 

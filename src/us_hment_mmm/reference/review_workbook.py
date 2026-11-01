@@ -7,7 +7,7 @@ do, then the column headers (row 2), then the rows (row 3 on).
   Read me                 how the workbook works
   1 · Product codes       media product codes not linked to a film
   2 · Flagged films       films flagged when the title table was built
-  3 · Dates               NBC or Finance dates that differ from the approved date
+  3 · Dates               NBC or Finance dates that differ from the current date
   4 · Revenue product IDs product IDs NBC tags with a film but not linked yet
   Add films, Change films, Map codes, Map product IDs   changes typed by hand
   Films now               the title table today (reference only, never read back)
@@ -60,12 +60,12 @@ REVIEW_TABS = {
          ("Decision", "decision", 13), ("Reason", "reason", 50)],
         NOTE_CHOICES),
     3: ("3 · Dates",
-        "NBC or Finance has a different date from the approved date the model uses. Accept "
-        "switches to the proposed date. Keep as is keeps the approved date (you will not be "
-        "asked about this proposed date again). Use my answer lets you type the right date "
-        "(like 2026-06-30) under Your answer.",
+        "NBC or Finance has a date that differs from the current date (the date the model uses "
+        "now, or empty if there is none yet). Accept replaces the current date with the proposed "
+        "date. Keep as is keeps the current date (you will not be asked about this proposed date "
+        "again). Use my answer lets you type the right date (like 2026-06-30) under Your answer.",
         [("Film", "film", 34), ("IMDb ID", "imdb_id", 13), ("In MMM", "in_mmm", 12),
-         ("Date", "date_type", 13), ("Approved date (used now)", "now", 14),
+         ("Date", "date_type", 13), ("Current date (used now)", "now", 14),
          ("Proposed date", "proposed", 14), ("From", "source", 14), ("Decision", "decision", 15),
          ("Your answer (date)", "answer", 14), ("Reason", "reason", 40)],
         CHOICES),
@@ -136,7 +136,7 @@ READ_ME = [
     "THE TABS",
     "  1 · Product codes        media codes not linked to a film",
     "  2 · Flagged films        films with a problem found when the title table was built",
-    "  3 · Dates                NBC or Finance dates that differ from the approved date",
+    "  3 · Dates                NBC or Finance dates that differ from the current date",
     "  4 · Revenue product IDs  revenue codes not linked to a film yet",
     "  Add films / Change films / Map codes / Map product IDs   fixes you type by hand",
     "  Films now                the current film list, to look up IMDb IDs (not read back)",
@@ -248,17 +248,20 @@ def write_workbook(items: list[dict], titles: dict, folder: str | Path | None = 
     return path
 
 
-def _rows(ws, cols, tab, problems):
-    """Rows of one tab as dicts keyed by field name (header on row 2, data from row 3)."""
+def _rows(ws, cols, tab, problems, required=None):
+    """Rows of one tab as dicts keyed by field name (header on row 2, data from row 3).
+    Only the 'required' columns must be present (default: all); others are read when there."""
+    required = {f for _h, f, _w in cols} if required is None else required
     it = ws.iter_rows(values_only=True)
     next(it, None)                                   # banner
     header = [R.text(h) for h in next(it, ())]
     index = {}
     for h, field, _w in cols:
-        if h not in header:
-            problems.append(f"The '{tab}' tab has no '{h}' column. Do not rename or move columns.")
-        else:
+        if h in header:
             index[field] = header.index(h)
+        elif field in required:
+            problems.append(f"The '{tab}' tab has no '{h}' column. Do not rename or delete the "
+                            "yellow columns or the Row ID column.")
     for n, values in enumerate(it, start=3):
         yield n, {f: (values[i] if i < len(values) else None) for f, i in index.items()}
 
@@ -277,7 +280,8 @@ def read_workbook(path: str | Path) -> tuple[dict, list[str]]:
             problems.append(f"The '{tab}' tab is missing. Use a workbook issued by the notebook.")
             continue
         label_field = cols[0][1]
-        for n, row in _rows(wb[tab], cols + [(ID_HEADER, "_id", 0)], tab, problems):
+        for n, row in _rows(wb[tab], cols + [(ID_HEADER, "_id", 0)], tab, problems,
+                            required=INPUT_FIELDS | {"_id"}):
             raw = R.text(row.get("decision"))
             if not raw and not R.text(row.get("answer")) and not R.text(row.get("reason")):
                 continue

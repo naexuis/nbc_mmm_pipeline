@@ -378,3 +378,28 @@ def test_old_placeholder_means_non_film():
     assert p.problems == []
     got = {c["field"]: c["new"] for c in p.changes}
     assert got == {"category": "non_film"}          # imdb_id stays empty
+
+
+def test_placeholder_dates_are_blank():
+    assert R.parse_date("1899-12-30") is None
+    assert R.parse_date("12/30/1899") is None
+    assert R.parse_date(__import__("datetime").date(1899, 12, 30)) is None
+    diffs = R.date_differences(TITLES, {}, {"tt1262426": {"pvod_date": R.parse_date("1899-12-30"),
+                                                         "est_date": None}})
+    assert diffs == []
+
+
+def test_reader_tolerates_hidden_display_columns(tmp_path):
+    import openpyxl
+
+    from us_hment_mmm.reference import review_workbook as W
+
+    items = _items()
+    path = W.write_workbook(items, TITLES, tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["3 · Dates"]
+    ws.cell(2, 5).value = "Approved date (used now)"   # an older workbook's header
+    _decide(ws, "WICKED", None, "Accept", "ok")
+    wb.save(path)
+    data, problems = W.read_workbook(path)
+    assert problems == [] and len(data["review"]) == 1
