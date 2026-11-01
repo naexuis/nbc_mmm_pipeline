@@ -403,3 +403,32 @@ def test_reader_tolerates_hidden_display_columns(tmp_path):
     wb.save(path)
     data, problems = W.read_workbook(path)
     assert problems == [] and len(data["review"]) == 1
+
+
+def test_deciding_a_date_turns_down_the_other_sources():
+    enrich = dict(ENRICH, tt1262426={"pvod_date": "2024-12-30", "est_date": None,
+                                     "title_name": "WICKED"})
+    chtt = {"tt1262426": {"pvod_date": "2024-12-20", "est_date": None}}
+    dates = R.date_differences(TITLES, enrich, chtt)
+    items = R.build_items([], TITLES, enrich, dates, [])
+    nbc = next(i for i in items if i["key"] == "date|tt1262426|pvod_date|NBC")
+    fin = next(i for i in items if i["key"] == "date|tt1262426|pvod_date|Finance")
+    # Accept NBC on one row only: Finance's date is turned down automatically
+    p = R.plan_from_workbook({"review": [_row(nbc, 3, "approve")]}, items, TITLES, ALIASES,
+                             enrich, chtt)
+    got = {(c["key"], c["field"]): c["new"] for c in p.changes}
+    assert got[("tt1262426", "pvod_date")] == "2024-12-30"
+    assert got[("date|tt1262426|pvod_date|Finance", "reject")] == "2024-12-20"
+    # Use my answer on both rows: both sources turned down once each, no duplicates
+    p = R.plan_from_workbook({"review": [_row(nbc, 3, "use instead", use_instead="2024-12-25"),
+                                         _row(fin, 4, "use instead", use_instead="2024-12-25")]},
+                             items, TITLES, ALIASES, enrich, chtt)
+    assert p.problems == []
+    keys = [c["key"] for c in p.changes if c["field"] == "reject"]
+    assert sorted(keys) == ["date|tt1262426|pvod_date|Finance", "date|tt1262426|pvod_date|NBC"]
+    assert [c["new"] for c in p.changes if c["key"] == "tt1262426"] == ["2024-12-25"]
+    # the next workbook would show nothing for this date
+    rejected = {(c["key"], c["new"]) for c in p.changes if c["field"] == "reject"}
+    after = dict(TITLES, tt1262426=dict(TITLES["tt1262426"], pvod_date="2024-12-25"))
+    again = R.build_items([], after, enrich, R.date_differences(after, enrich, chtt), [], rejected)
+    assert not any(i["section"] == 3 for i in again)

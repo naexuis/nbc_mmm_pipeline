@@ -287,10 +287,11 @@ def item_check(item: dict) -> str:
 class Plan:
     """Collects changes against in-memory copies of the tables and checks them."""
 
-    def __init__(self, titles: dict, aliases: dict, enrichment: dict):
+    def __init__(self, titles: dict, aliases: dict, enrichment: dict, chtt: dict | None = None):
         self.titles = {k: dict(v) for k, v in titles.items()}
         self.aliases = {k: dict(v) for k, v in aliases.items()}
         self.enrichment = enrichment
+        self.chtt = chtt or {}
         self.changes: list[dict] = []
         self.problems: list[str] = []
         self.skipped: list[str] = []
@@ -305,9 +306,10 @@ class Plan:
 
     def _record(self, table, key, field, old, new):
         k = (table, key, field)
-        if k in self._set_by and self._set_by[k] != new:
-            self.problem(f"{key} {field} is set to two different values in this workbook")
-            return
+        if k in self._set_by:
+            if self._set_by[k] != new:
+                self.problem(f"{key} {field} is set to two different values in this workbook")
+            return                      # same value again: already recorded
         self._set_by[k] = new
         if old != new:
             self.changes.append({"table": table, "key": key, "field": field, "old": old,
@@ -378,10 +380,27 @@ class Plan:
         row = self.titles[imdb]
         self._record(config.TITLE_TABLE, imdb, field, row.get(field), value)
         row[field] = value
+        if field in DATE_FIELDS:
+            self._settle_date(imdb, field, value)
         if field == "in_mmm":
             self._record(config.TITLE_TABLE, imdb, "in_mmm_reason", row.get("in_mmm_reason"),
                          self.reason)
             row["in_mmm_reason"] = self.reason
+
+    def _settle_date(self, imdb: str, field: str, final):
+        """
+        A person has decided this date, so every NBC / Finance value that differs from it is
+        turned down too (recorded like Keep as is). Otherwise the other source's date would
+        come back on the next workbook as a new proposal.
+        """
+        proposed: dict[str, list[str]] = {}
+        for source, value in (("NBC", self.enrichment.get(imdb, {}).get(field)),
+                              ("Finance", self.chtt.get(imdb, {}).get(field))):
+            if value and value != final:
+                proposed.setdefault(value, []).append(source)
+        for value, sources in proposed.items():
+            self._record(REVIEW_TABLE, f"date|{imdb}|{field}|{' + '.join(sources)}", "reject",
+                         None, value)
 
     def _map(self, alias_type, group, value, category, imdb, label):
         if category == "film" and imdb not in self.titles and not self._title_from_enrichment(imdb):
@@ -460,9 +479,9 @@ class Plan:
 
 
 def plan_from_workbook(data: dict, items: list[dict], titles: dict, aliases: dict,
-                       enrichment: dict) -> Plan:
+                       enrichment: dict, chtt: dict | None = None) -> Plan:
     """Turn the rows read from a review workbook into a checked Plan."""
-    plan = Plan(titles, aliases, enrichment)
+    plan = Plan(titles, aliases, enrichment, chtt)
     by_key = {i["key"]: i for i in items}
 
     def start(tab, row, reason) -> bool:
@@ -660,7 +679,8 @@ def gather(client=None) -> dict:
     dates = date_differences(titles, enrichment, chtt)
     pids = _read_unmapped_pids(client, titles, aliases)
     items = build_items(codes, titles, enrichment, dates, pids, _read_rejections(client))
-    return {"titles": titles, "aliases": aliases, "enrichment": enrichment, "items": items}
+    return {"titles": titles, "aliases": aliases, "enrichment": enrichment, "chtt": chtt,
+            "items": items}
 
 
 def _json_rows(rows, schema):
@@ -756,7 +776,8 @@ def run(dry_run: bool = True, root: str | Path | None = None) -> dict:
     path = waiting[0]
     result["workbook"] = path.name
     data, read_problems = W.read_workbook(path)
-    plan = plan_from_workbook(data, g["items"], g["titles"], g["aliases"], g["enrichment"])
+    plan = plan_from_workbook(data, g["items"], g["titles"], g["aliases"], g["enrichment"],
+                              g["chtt"])
     result.update(changes=plan.changes, problems=read_problems + plan.problems,
                   skipped=plan.skipped)
     if result["problems"]:
