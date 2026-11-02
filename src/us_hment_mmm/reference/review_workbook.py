@@ -92,6 +92,16 @@ REVIEW_TABS = {
          ("NBC genre", "proposed", 22), ("Decision", "decision", 15),
          ("Your answer (genre)", "answer", 22), ("Reason", "reason", 40)],
         CHOICES),
+    6: ("6 · Distributor",
+        "These films' distributor is not in its agreed standard spelling (for example BLEECKER "
+        "ST becomes BLEECKER STREET), or is blank and NBC has one. Accept uses the proposed "
+        "name. Keep as is keeps the current one. Use my answer lets you type a distributor "
+        "(it is stored in its standard spelling).",
+        [("Film", "film", 34), ("IMDb ID", "imdb_id", 13), ("In MMM", "in_mmm", 12),
+         ("Current distributor", "now", 24), ("Proposed", "proposed", 24), ("Why", "why", 34),
+         ("Decision", "decision", 15), ("Your answer (distributor)", "answer", 24),
+         ("Reason", "reason", 40)],
+        CHOICES),
 }
 INPUT_FIELDS = {"decision", "answer", "reason"}
 
@@ -151,6 +161,7 @@ READ_ME = [
     "  3 · Dates                NBC or Finance dates that differ from the current date",
     "  4 · Revenue product IDs  revenue codes not linked to a film yet",
     "  5 · NBC genre            NBC master genres that differ from the film's genre",
+    "  6 · Distributor          distributors to put in their standard spelling",
     "  Add films / Change films / Map codes / Map product IDs   fixes you type by hand",
     "  Films now                the current film list, to look up IMDb IDs (not read back)",
     "",

@@ -129,6 +129,28 @@ TITLE_HISTORY_TABLE = "title_history"  # every change: who, when, why, old -> ne
 #   imported/  workbooks already saved to BigQuery
 REVIEW_DIR = "/domino/datasets/local/nbcu_mmm_dev/us_hment_mmm/review/titles"
 
+# ---- Distributor standard names (agreed with Marcus 2026-11-01) --------------------
+# Any spelling on the left (old dictionary or NBC enrichment) is stored as the name on the
+# right. Matching ignores case, punctuation and extra spaces. Unlisted names are kept as is.
+DISTRIBUTOR_STANDARD = {
+    "UNIVERSAL PICTURES": "UNIVERSAL",
+    "FOCUS FEATURES": "FOCUS",
+    "STX ENTERTAINMENT": "STX", "STX FILMS": "STX",
+    "BLEECKER ST": "BLEECKER STREET", "BLEECKER STREET MEDIA": "BLEECKER STREET",
+    "BRIARCLIFF ENTERTAINMENT": "BRIARCLIFF",
+    "OPEN ROAD FILMS": "OPEN ROAD",
+    "OPENROAD BRIARCLIFF": "OPEN ROAD/BRIARCLIFF", "OPEN ROAD BRIARCLIFF": "OPEN ROAD/BRIARCLIFF",
+    "METRO GOLDWYN MAYER": "MGM",
+    "MOMENTUM PICTURES": "MOMENTUM", "MMTP": "MOMENTUM",
+    "1440 ENTERTAINMENT": "UNIVERSAL 1440", "UNIVERSAL 1440 ENTERTAINMENT": "UNIVERSAL 1440",
+    "PURE FLIX ENTERTAINMENT": "PURE FLIX", "PURE FLIX DIGITAL": "PURE FLIX", "PURE": "PURE FLIX",
+    "FATHOM EVENTS": "FATHOM", "FTHM": "FATHOM",
+    "GO": "WELL GO USA", "WELL GO USA INC": "WELL GO USA", "WELL GO USA ENT": "WELL GO USA",
+    "DREAMWORKKS": "DREAMWORKS",
+    "AVIRON PICTURES": "AVIRON",
+    "GE": "GREENWICH ENTERTAINMENT",
+}
+
 # ---- Shared tables owned by other projects (see DATA_OWNERS.md) ----------------
 # Amazon MMT Pipeline: first week each film earned Amazon revenue, and Amazon week quality.
 AMAZON_FIRST_REVENUE_TABLE = f"{PROJECT_ID}.UPNA_client_he_amazon_mmt_dev.film_first_revenue"

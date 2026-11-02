@@ -51,7 +51,7 @@ SETTABLE_FIELDS = ("title_name", "distributor", "release_date", "pvod_date", "es
                    "in_mmm", "review_note")
 FIELD_LABELS = {"release_date": "Release", "pvod_date": "PVOD", "est_date": "EST"}
 SECTION_NAMES = {1: "Product code", 2: "Review note", 3: "Date", 4: "Product ID",
-                 5: "NBC genre"}
+                 5: "NBC genre", 6: "Distributor"}
 DECISIONS = ("Approve", "Use instead", "Reject")
 REVIEW_TABLE = "review_decision"   # table_name used in title_history for rejected suggestions
 NO_SUGGESTION = "—"
@@ -203,6 +203,41 @@ def date_differences(titles: dict, enrichment: dict, chtt: dict) -> list[dict]:
     return out
 
 
+def _dist_key(s) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9/ ]", " ", text(s).upper())).strip()
+
+
+_DIST_STANDARD = {_dist_key(k): v for k, v in config.DISTRIBUTOR_STANDARD.items()}
+
+
+def standard_distributor(value) -> str | None:
+    """The agreed standard name for a distributor spelling (unlisted names: uppercase, as is)."""
+    key = _dist_key(value)
+    if not key:
+        return None
+    return _DIST_STANDARD.get(key, text(value).upper())
+
+
+def distributor_differences(titles: dict, enrichment: dict) -> list[dict]:
+    """Distributors not in their standard spelling, and blank ones NBC can fill."""
+    out = []
+    for imdb, t in titles.items():
+        cur = text(t.get("distributor")) or None
+        if cur:
+            std = standard_distributor(cur)
+            if std != cur:
+                out.append({"imdb_id": imdb, "title_name": t["title_name"], "in_mmm": t["in_mmm"],
+                            "current": cur, "new": std, "why": "standard name for this distributor"})
+        else:
+            nbc = standard_distributor(enrichment.get(imdb, {}).get("distributor"))
+            if nbc:
+                out.append({"imdb_id": imdb, "title_name": t["title_name"], "in_mmm": t["in_mmm"],
+                            "current": None, "new": nbc, "why": "NBC distributor (standard name)"})
+    order = {True: 0, None: 1, False: 2}
+    out.sort(key=lambda d: (order[d["in_mmm"]], d["title_name"]))
+    return out
+
+
 def genre_differences(titles: dict, enrichment: dict) -> list[dict]:
     """NBC master genres that differ from the film's current genre (blank counts as different)."""
     out = []
@@ -261,6 +296,7 @@ def amazon_check(day: str | None, ev: dict | None, missing_weeks: set[str] = fro
 def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[dict],
                 pids: list[dict], rejected: set[tuple[str, str]] = frozenset(),
                 genres: list[dict] = (), amazon: dict | None = None,
+                distributors: list[dict] = (),
                 missing_weeks: set[str] = frozenset()) -> list[dict]:
     """
     The review list. Each item has a stable key, a 'current' and 'suggested' value (used to
@@ -336,6 +372,12 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
              "imdb_id": g["imdb_id"], "in_mmm": in_mmm_text[g["in_mmm"]],
              "genre_type": GENRE_LABELS[g["field"]], "now": g["current"] or "(none)",
              "proposed": g["new"]})
+    for d in distributors:
+        add(6, f"dist|{d['imdb_id']}", d["current"] or "(none)", d["new"], d["why"],
+            {"imdb_id": d["imdb_id"], "field": "distributor", "value": d["new"]},
+            {"label": d["title_name"], "film": d["title_name"], "imdb_id": d["imdb_id"],
+             "in_mmm": in_mmm_text[d["in_mmm"]], "now": d["current"] or "(none)",
+             "proposed": d["new"]})
     return items
 
 
@@ -423,7 +465,8 @@ class Plan:
                     self.problem(f"{imdb} {field} '{text(raw)}' is not a date like 2026-06-30")
                     continue
             if value is not None:
-                new[field] = value.upper() if field == "title_name" else value
+                new[field] = (value.upper() if field == "title_name" else
+                              standard_distributor(value) if field == "distributor" else value)
                 self._record(config.TITLE_TABLE, imdb, field, None, new[field])
 
     def set_value(self, imdb: str, field: str, value):
@@ -449,6 +492,8 @@ class Plan:
             value = text(value) or None
             if field in ("title_name", *GENRE_FIELDS) and value:
                 value = value.upper()
+            if field == "distributor":
+                value = standard_distributor(value)
         row = self.titles[imdb]
         self._record(config.TITLE_TABLE, imdb, field, row.get(field), value)
         row[field] = value
@@ -544,7 +589,7 @@ class Plan:
             self.map_code(t["group"], t["code"], value, t["label"])
         elif section == 2:
             self.set_value(t["imdb_id"], "review_note", value)
-        elif section in (3, 5):
+        elif section in (3, 5, 6):
             self.set_value(t["imdb_id"], t["field"], value)
         else:
             self.map_pid(t["product_id"], value, t["label"])
@@ -793,7 +838,9 @@ def gather(client=None) -> dict:
     pids = _read_unmapped_pids(client, titles, aliases)
     amazon, missing, amazon_note = _read_amazon(client, titles)
     items = build_items(codes, titles, enrichment, dates, pids, _read_rejections(client),
-                        genre_differences(titles, enrichment), amazon, missing)
+                        genres=genre_differences(titles, enrichment), amazon=amazon,
+                        missing_weeks=missing,
+                        distributors=distributor_differences(titles, enrichment))
     return {"titles": titles, "aliases": aliases, "enrichment": enrichment, "chtt": chtt,
             "items": items, "amazon_note": amazon_note}
 
@@ -950,7 +997,8 @@ def status_markdown(result: dict):
 
     c = result["counts"]
     counts = (f"On the review list now: **{c[1]}** product codes, **{c[2]}** review notes, "
-              f"**{c[3]}** dates, **{c[4]}** product IDs, **{c.get(5, 0)}** NBC genres.")
+              f"**{c[3]}** dates, **{c[4]}** product IDs, **{c.get(5, 0)}** NBC genres, "
+              f"**{c.get(6, 0)}** distributors.")
     if result.get("amazon_note"):
         counts += f"  \nℹ️ {result['amazon_note']}"
     n, status, name = len(result["changes"]), result["status"], result["workbook"]
@@ -962,7 +1010,8 @@ def status_markdown(result: dict):
         body = (f"**File:** `{name}`\n\n**Where to find it:** {where_to_find('issued')}  \n"
                 "Click the file name to download it.\n\n"
                 "**What to do in Excel:** work through the numbered tabs (1 · Product codes, "
-                "2 · Flagged films, 3 · Dates, 4 · Revenue product IDs, 5 · NBC genre). Each tab "
+                "2 · Flagged films, 3 · Dates, 4 · Revenue product IDs, 5 · NBC genre, "
+                "6 · Distributor). Each tab "
                 "starts with a "
                 "blue box that says what the problem is and what each choice does. Fill in only "
                 "the yellow columns, with a **Reason** for every row you decide. Save it as .xlsx "

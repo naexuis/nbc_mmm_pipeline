@@ -500,7 +500,7 @@ def test_dates_tab_shows_amazon_check(tmp_path):
     rows = {films.cell(r, 1).value: r for r in range(3, films.max_row + 1)}
     codes = films.cell(rows["tt12921446"], fh.index("Media product codes") + 1).value
     assert codes == "UP_HE:SSS"
-    assert "5 · NBC genre" in wb.sheetnames
+    assert "5 · NBC genre" in wb.sheetnames and "6 · Distributor" in wb.sheetnames
 
 
 def test_film_links_lists_product_ids_and_codes():
@@ -550,3 +550,32 @@ def test_view_sql_mentions_every_field():
     assert "revenue_product_ids" in V.detail_sql()
     assert "IS DISTINCT FROM" in V.check_sql()
     assert "ADD COLUMN IF NOT EXISTS nbc_genre_1" in V.upgrade_sql()
+
+
+def test_standard_distributor_names():
+    assert R.standard_distributor("Bleecker St.") == "BLEECKER STREET"
+    assert R.standard_distributor("WELL GO USA, INC.") == "WELL GO USA"
+    assert R.standard_distributor("GO") == "WELL GO USA"
+    assert R.standard_distributor("OpenRoad Briarcliff") == "OPEN ROAD/BRIARCLIFF"
+    assert R.standard_distributor("MMTP") == "MOMENTUM"
+    assert R.standard_distributor("Neon") == "NEON"
+    assert R.standard_distributor("") is None
+
+
+def test_distributor_items_rename_and_fill():
+    titles = dict(TITLES)
+    titles["tt1262426"] = dict(titles["tt1262426"], distributor="UNIVERSAL PICTURES")
+    titles["tt12921446"] = dict(titles["tt12921446"], distributor=None)
+    enrich = {"tt12921446": {"distributor": "Bleecker St.", "title_name": "X"}}
+    diffs = R.distributor_differences(titles, enrich)
+    assert {(d["imdb_id"], d["current"], d["new"]) for d in diffs} == {
+        ("tt1262426", "UNIVERSAL PICTURES", "UNIVERSAL"), ("tt12921446", None, "BLEECKER STREET")}
+    items = R.build_items([], titles, enrich, [], [], distributors=diffs)
+    it = next(i for i in items if i["key"] == "dist|tt1262426")
+    p = R.plan_from_workbook({"review": [_row(it, 3, "approve")]}, items, titles, ALIASES, enrich)
+    assert p.changes[0]["new"] == "UNIVERSAL"
+    # a typed distributor is stored in its standard spelling
+    p = R.plan_from_workbook({"change_films": [{"row": 3, "film": "tt1262426",
+                                                "field": "distributor", "new_value": "bleecker st",
+                                                "reason": "x"}]}, [], titles, ALIASES, enrich)
+    assert p.changes[0]["new"] == "BLEECKER STREET"
