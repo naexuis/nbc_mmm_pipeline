@@ -65,6 +65,13 @@ REVENUE_REQUIRED_COLUMNS = (
     "royalty_total_usd",
 )
 
+# Core revenue (us_hment_mmm_core), built from the newest raw delivery.
+REVENUE_CORE_TABLE = "revenue_film_daily"        # film x day x retailer, every day sold
+REVENUE_PREMIUM_VIEW = "revenue_premium_daily"   # film x day, premium window, pre-sales on PVOD day
+REVENUE_COUNTRY = "USA"                          # the MMM uses US revenue only (Canada is for CHTT checks)
+# Data sources left out of the MMM. For Amazon the MMM uses "Amazon Royalty" only.
+REVENUE_EXCLUDE_SOURCES = ("Amazon Sale",)
+
 # ---- Reference CSVs copied by hand from NBC GCP (one dated file per copy) ---
 # Each source: folder in REVENUE_BUCKET, file-name pattern (date in group 1), raw table,
 # required columns, and how many copies to keep.
