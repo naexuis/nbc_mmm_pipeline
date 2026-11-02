@@ -48,6 +48,12 @@ MEDIA_MEDIAOCEAN_TYPES = {
 # How many snapshot dates to keep in each raw media table.
 MEDIA_KEEP_SNAPSHOTS = 3
 
+# Core media (us_hment_mmm_core), built from the newest complete media snapshot.
+MEDIA_PRISMA_CORE_TABLE = "media_prisma_daily"   # placement x day spend (Prisma)
+MEDIA_PRISMA_ADVERTISERS = ("ZUE", "ZFF", "ZFE")
+MEDIA_TEST_CAMPAIGNS = ("CPZLLW", "CPKVZR")      # Ad Ops test campaigns: never spend
+MEDIA_APPROVED_STATUS = "APPROVED"               # only approved campaign budgets count
+
 # ---- Revenue source (exported by hand from NBC GCP) ------------------------
 REVENUE_BUCKET = "nbcu-marcus-hilliard"
 REVENUE_US_PREFIX = "hment_rev_usa/"

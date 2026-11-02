@@ -181,28 +181,15 @@ def _close(a, b) -> bool:
     return abs(float(a or 0) - float(b or 0)) < 1.0
 
 
-def report(s) -> list[str]:
-    """Plain-English lines describing the summary."""
-    lines = [
-        f"Revenue delivery: {s.delivery}  (US rows; left out: {', '.join(config.REVENUE_EXCLUDE_SOURCES)})",
-        f"  Royalty kept from the delivery:        {_money(s.kept_royalty)}",
-        f"  Royalty linked to a film:              {_money(s.film_royalty)}",
-        f"     sold before PVOD (pre-sales):       {_money(s.before_pvod_royalty)}",
-        f"     premium window (PVOD to EST - 1):   {_money(s.premium_royalty)}",
-        f"     on or after EST:                    {_money(s.after_est_royalty)}",
-        f"     film has no PVOD date:              {_money(s.no_pvod_royalty)}",
-        f"  Revenue used by the MMM (pre-sales + premium): "
-        f"{_money(float(s.before_pvod_royalty or 0) + float(s.premium_royalty or 0))}",
-        f"  Films with revenue product IDs: {s.films_with_ids};  with revenue in this delivery: "
-        f"{s.films_with_revenue}",
-    ]
+def _notes(s) -> list[str]:
     notes = []
     if s.films_no_pvod:
         notes.append(f"{s.films_no_pvod} film(s) have revenue but no PVOD date. Their revenue is "
-                     "kept in the table but not used by the MMM until a date is added (05_Review_Titles).\n"
-                     f"      In MMM = yes: {s.no_pvod_in_mmm} ({_money(s.no_pvod_in_mmm_royalty)});  "
-                     f"In MMM = no: {s.no_pvod_not_in_mmm};  not reviewed: {s.no_pvod_unreviewed};  "
-                     f"released before March 2020 (before PVOD existed): {s.no_pvod_before_2020}")
+                     "kept in the table but not used by the MMM until a date is added in "
+                     f"05_Review_Titles. In MMM = yes: {s.no_pvod_in_mmm} "
+                     f"({_money(s.no_pvod_in_mmm_royalty)}); In MMM = no: {s.no_pvod_not_in_mmm}; "
+                     f"not reviewed: {s.no_pvod_unreviewed}; released before March 2020 "
+                     f"(before PVOD existed): {s.no_pvod_before_2020}.")
     if s.films_no_est:
         notes.append(f"{s.films_no_est} film(s) have a PVOD date but no EST date, so their premium "
                      "window runs to the newest sale day. Add the EST date in 05_Review_Titles.")
@@ -212,30 +199,74 @@ def report(s) -> list[str]:
         notes.append(f"{s.shared_ids} revenue product ID(s) are linked to more than one film "
                      f"(e.g. {s.shared_examples}). Fix them in 05_Review_Titles before writing; "
                      "otherwise that revenue would be counted twice.")
-    return lines + ([""] + ["NOTE: " + n for n in notes] if notes else [])
+    return notes
+
+
+def sections(s) -> dict:
+    """What the notebook shows: one line of facts, a table, and notes."""
+    used = float(s.before_pvod_royalty or 0) + float(s.premium_royalty or 0)
+    rows = [
+        ("Royalty kept from the delivery", s.kept_royalty),
+        ("Linked to a film", s.film_royalty),
+        ("  ↳ sold before PVOD (pre-sales)", s.before_pvod_royalty),
+        ("  ↳ premium window (PVOD to EST − 1)", s.premium_royalty),
+        ("  ↳ on or after EST", s.after_est_royalty),
+        ("  ↳ film has no PVOD date", s.no_pvod_royalty),
+        ("Used by the MMM (pre-sales + premium)", used),
+    ]
+    return {
+        "facts": (f"Revenue delivery **{s.delivery}** · US rows only · left out: "
+                  f"{', '.join(config.REVENUE_EXCLUDE_SOURCES)} · {s.films_with_ids} films have "
+                  f"revenue product IDs ({s.films_with_revenue} with revenue in this delivery)"),
+        "tables": [{"title": "Royalty", "columns": ["Item", "Royalty"], "money": ["Royalty"],
+                    "rows": rows, "bold_last": True}],
+        "notes": _notes(s),
+    }
+
+
+def report(s) -> list[str]:
+    """Plain-text version of sections() for the command line."""
+    sec = sections(s)
+    lines = [sec["facts"].replace("**", "")]
+    for name, amount in sec["tables"][0]["rows"]:
+        lines.append(f"  {name.replace('↳ ', ''):<44} {_money(amount):>16}")
+    return lines + ([""] + ["NOTE: " + n for n in sec["notes"]] if sec["notes"] else [])
+
+
+def run(dry_run: bool = True, client=None) -> dict:
+    """Check (and with dry_run=False, build). Returns lines to show and the outcome."""
+    client = client or bq_client()
+    s = summary(client)
+    lines = report(s)
+    sec = sections(s)
+    if dry_run:
+        return {"lines": lines, **sec, "status": "CHECKED",
+                "message": "Nothing was written. To save, set DRY_RUN = False and run again."}
+    if s.shared_ids:
+        return {"lines": lines, **sec, "status": "NOT_WRITTEN",
+                "message": "Not written: some revenue product IDs are linked to more than one "
+                           "film (see the notes below). Fix them in 05_Review_Titles, then run again."}
+    c = write(client)
+    used = float(s.before_pvod_royalty or 0) + float(s.premium_royalty or 0)
+    ok = _close(c.table_royalty, s.film_royalty) and _close(c.view_royalty, used)
+    wrote = (f"Wrote `{config.DATASET_CORE}.{config.REVENUE_CORE_TABLE}` ({c.table_rows:,} rows, "
+             f"{_money(c.table_royalty)}) and view `{config.DATASET_CORE}."
+             f"{config.REVENUE_PREMIUM_VIEW}` ({c.view_films} films, {_money(c.view_royalty)}).")
+    lines = lines + ["", wrote.replace("`", "")]
+    sec["facts"] += "  \n" + wrote
+    return {"lines": lines, **sec, "status": "PASS" if ok else "MISMATCH",
+            "message": "Table and view totals match the check." if ok else
+                       "Table or view totals differ from the check. Save this notebook and "
+                       "send it to the pipeline owner."}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build the core revenue table and view.")
     ap.add_argument("--write", action="store_true", help="Build the table and view (default: check only)")
     args = ap.parse_args()
-    client = bq_client()
-    s = summary(client)
-    print("\n".join(report(s)))
-    if not args.write:
-        print("\nCheck only: nothing was written. To build, run with --write.")
-        return
-    if s.shared_ids:
-        print("\nNot written: some product IDs are linked to more than one film (see NOTE above).")
-        return
-    c = write(client)
-    used = float(s.before_pvod_royalty or 0) + float(s.premium_royalty or 0)
-    ok = _close(c.table_royalty, s.film_royalty) and _close(c.view_royalty, used)
-    print(f"\nWrote {config.DATASET_CORE}.{config.REVENUE_CORE_TABLE} ({c.table_rows:,} rows, "
-          f"{_money(c.table_royalty)}) and view {config.DATASET_CORE}.{config.REVENUE_PREMIUM_VIEW} "
-          f"({c.view_films} films, {_money(c.view_royalty)}).")
-    print("PASS: table and view totals match the check above." if ok else
-          "CHECK: table or view totals differ from the check above; please send this output to the pipeline owner.")
+    r = run(dry_run=not args.write)
+    print("\n".join(r["lines"]))
+    print(f"\n{r['status']}: {r['message']}")
 
 
 if __name__ == "__main__":

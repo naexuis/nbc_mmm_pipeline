@@ -47,3 +47,32 @@ def test_report_notes_missing_dates_and_shared_ids():
 
 def test_after_est_does_not_count_films_without_pvod():
     assert "s.transaction_date >= t.pvod_date AND s.transaction_date >= t.est_date" in b.summary_sql()
+
+
+class _Client:
+    def __init__(self, rows):
+        self.rows, self.sql = rows, []
+
+    def query(self, sql):
+        self.sql.append(sql)
+        rows = self.rows.pop(0) if self.rows else []
+        return SimpleNamespace(result=lambda: rows)
+
+
+def test_run_check_only_writes_nothing():
+    c = _Client([[_summary()]])
+    r = b.run(dry_run=True, client=c)
+    assert r["status"] == "CHECKED" and len(c.sql) == 1
+
+
+def test_run_refuses_to_write_shared_ids():
+    c = _Client([[_summary(shared_ids=1, shared_examples="1")]])
+    r = b.run(dry_run=False, client=c)
+    assert r["status"] == "NOT_WRITTEN" and len(c.sql) == 1
+
+
+def test_run_write_passes_when_totals_match():
+    check = SimpleNamespace(table_royalty=2e9, view_royalty=1e9, table_rows=10, view_films=5)
+    c = _Client([[_summary()], [], [], [check]])
+    r = b.run(dry_run=False, client=c)
+    assert r["status"] == "PASS" and any("CREATE OR REPLACE TABLE" in s for s in c.sql)
