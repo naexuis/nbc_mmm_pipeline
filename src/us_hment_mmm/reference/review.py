@@ -28,9 +28,10 @@ import hashlib
 import os
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from google.api_core.exceptions import GoogleAPIError
 from google.cloud import bigquery
 
 from us_hment_mmm import config
@@ -43,10 +44,14 @@ DATE_FIELDS = ("release_date", "pvod_date", "est_date")
 # Dates before this year are placeholders, not real dates (e.g. 1899-12-30 is how a blank or
 # zero comes out of Excel, which Finance's CHTT uses for "no premium window").
 MIN_YEAR = 1950
+GENRE_FIELDS = ("nbc_genre_1", "nbc_genre_2")
+GENRE_LABELS = {"nbc_genre_1": "NBC genre 1", "nbc_genre_2": "NBC genre 2"}
 SETTABLE_FIELDS = ("title_name", "distributor", "release_date", "pvod_date", "est_date",
+                   "nbc_genre_1", "nbc_genre_2",
                    "in_mmm", "review_note")
 FIELD_LABELS = {"release_date": "Release", "pvod_date": "PVOD", "est_date": "EST"}
-SECTION_NAMES = {1: "Product code", 2: "Review note", 3: "Date", 4: "Product ID"}
+SECTION_NAMES = {1: "Product code", 2: "Review note", 3: "Date", 4: "Product ID",
+                 5: "NBC genre"}
 DECISIONS = ("Approve", "Use instead", "Reject")
 REVIEW_TABLE = "review_decision"   # table_name used in title_history for rejected suggestions
 NO_SUGGESTION = "—"
@@ -198,8 +203,65 @@ def date_differences(titles: dict, enrichment: dict, chtt: dict) -> list[dict]:
     return out
 
 
+def genre_differences(titles: dict, enrichment: dict) -> list[dict]:
+    """NBC master genres that differ from the film's current genre (blank counts as different)."""
+    out = []
+    for imdb, t in titles.items():
+        e = enrichment.get(imdb, {})
+        for field, src in (("nbc_genre_1", "master_genre_1"), ("nbc_genre_2", "master_genre_2")):
+            value = text(e.get(src)).upper() or None
+            if value and value != (text(t.get(field)).upper() or None):
+                out.append({"imdb_id": imdb, "title_name": t["title_name"], "in_mmm": t["in_mmm"],
+                            "field": field, "current": t.get(field), "new": value})
+    order = {True: 0, None: 1, False: 2}
+    out.sort(key=lambda d: (order[d["in_mmm"]], d["title_name"], d["field"]))
+    return out
+
+
+def amazon_check(day: str | None, ev: dict | None, missing_weeks: set[str] = frozenset()) -> str:
+    """
+    Plain-English comparison of a PVOD date with the first week of Amazon revenue.
+    Amazon weeks start on Sunday. A PVOD date fits when it falls from 7 days before the first
+    sales week up to the end of that week (sales normally start on, or soon after, PVOD).
+    """
+    if not ev:
+        return ""
+    if not ev.get("usable_as_evidence", True):
+        return "Amazon: already selling when Amazon's data starts (June 2024); no evidence"
+    quality = text(ev.get("first_revenue_week_quality")).upper()
+    week = parse_date(ev.get("first_revenue_week") if quality == "PARTIAL"
+                      else ev.get("first_week_over_threshold") or ev.get("first_revenue_week"))
+    if not week:
+        return ""
+    price = ev.get("first_threshold_week_avg_price")
+    kind = ""
+    if price:
+        kind = " premium purchase" if price >= 15 else (" rental" if price < 10 else "")
+        kind = f", ${price:,.2f} avg{kind}"
+    notes = []
+    if quality == "PARTIAL":
+        notes.append("partial week")
+    w = datetime.fromisoformat(week).date()
+    if (w - timedelta(days=7)).isoformat() in missing_weeks:
+        notes.append("the week before is missing in Amazon's data")
+    head = f"Amazon: first sales week of {week}{kind}" + (f" ({'; '.join(notes)})" if notes else "")
+    d = parse_date(day)
+    if not d:
+        return head
+    gap = (datetime.fromisoformat(d).date() - w).days
+    if -7 <= gap <= 6:
+        verdict = "date fits"
+    elif gap < -7:
+        verdict = f"date is {-gap} days before that week"
+    else:
+        verdict = f"date is {gap} days after Amazon sales began"
+    return f"{head}. {verdict}"
+
+
 def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[dict],
-                pids: list[dict], rejected: set[tuple[str, str]] = frozenset()) -> list[dict]:
+                pids: list[dict], rejected: set[tuple[str, str]] = frozenset(),
+                genres: list[dict] = (), amazon: dict | None = None,
+                missing_weeks: set[str] = frozenset()) -> list[dict]:
     """
     The review list. Each item has a stable key, a 'current' and 'suggested' value (used to
     spot items that changed after a workbook was issued), 'show' (the columns its workbook
@@ -251,7 +313,9 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
             {"label": f"{d['title_name']} {FIELD_LABELS[d['field']]}", "film": d["title_name"],
              "imdb_id": d["imdb_id"], "in_mmm": in_mmm_text[d["in_mmm"]],
              "date_type": FIELD_LABELS[d["field"]] + " date",
-             "now": d["current"] or "(none)", "proposed": d["new"], "source": d["source"]})
+             "now": d["current"] or "(none)", "proposed": d["new"], "source": d["source"],
+             "amazon": amazon_check(d["new"], (amazon or {}).get(d["imdb_id"]), missing_weeks)
+             if d["field"] == "pvod_date" else ""})
     for p in sorted(pids, key=lambda p: -(p["royalty"] or 0)):
         name = titles[p["imdb_id"]]["title_name"]
         propose, why = suggest_for_pid(p.get("name"), p["imdb_id"], titles)
@@ -264,6 +328,14 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
              "sales": f"{p.get('first_sale') or '?'} to {p.get('last_sale') or '?'}",
              "tagged": f"{name} ({p['imdb_id']})",
              "proposed": f"Link to {name} ({p['imdb_id']})" if propose else NO_PROPOSAL})
+    for g in genres:
+        add(5, f"genre|{g['imdb_id']}|{g['field']}", g["current"] or "(none)", g["new"],
+            "NBC master genre",
+            {"imdb_id": g["imdb_id"], "field": g["field"], "value": g["new"]},
+            {"label": f"{g['title_name']} {GENRE_LABELS[g['field']]}", "film": g["title_name"],
+             "imdb_id": g["imdb_id"], "in_mmm": in_mmm_text[g["in_mmm"]],
+             "genre_type": GENRE_LABELS[g["field"]], "now": g["current"] or "(none)",
+             "proposed": g["new"]})
     return items
 
 
@@ -375,7 +447,7 @@ class Plan:
                 return
         else:
             value = text(value) or None
-            if field == "title_name" and value:
+            if field in ("title_name", *GENRE_FIELDS) and value:
                 value = value.upper()
         row = self.titles[imdb]
         self._record(config.TITLE_TABLE, imdb, field, row.get(field), value)
@@ -472,7 +544,7 @@ class Plan:
             self.map_code(t["group"], t["code"], value, t["label"])
         elif section == 2:
             self.set_value(t["imdb_id"], "review_note", value)
-        elif section == 3:
+        elif section in (3, 5):
             self.set_value(t["imdb_id"], t["field"], value)
         else:
             self.map_pid(t["product_id"], value, t["label"])
@@ -575,7 +647,9 @@ def _read_enrichment(client, ids, tags):
         SELECT imdb_id, ANY_VALUE(title_name) AS title_name,
                ANY_VALUE(studio_distributor) AS distributor,
                ANY_VALUE(us_widest_release_date) AS release_date,
-               ANY_VALUE(us_pvod_start_date) AS pvod_date, ANY_VALUE(us_est_date) AS est_date
+               ANY_VALUE(us_pvod_start_date) AS pvod_date, ANY_VALUE(us_est_date) AS est_date,
+               ANY_VALUE(master_genre_1) AS master_genre_1,
+               ANY_VALUE(master_genre_2) AS master_genre_2
         FROM `{_raw(t)}`
         WHERE {_latest(t)}
           AND (imdb_id IN UNNEST(@ids)
@@ -610,7 +684,7 @@ def _read_unmapped_codes(client, aliases):
     """Codes in the newest media snapshot with no alias row, with row counts and IMDb tags."""
     groups = config.MEDIA_BUSINESS_GROUPS
     codes = ", ".join(f"'{c}'" for c in groups)
-    latest = lambda t: f"_snapshot_date = (SELECT MAX(_snapshot_date) FROM `{_raw(t)}`)"  # noqa: E731
+    latest = lambda t: f"_snapshot_date = {media_snapshot_expr(t)}"  # noqa: E731
     sql = f"""
         WITH m AS (
           SELECT AdvertiserCode AS biz, ProductCode AS code, ProductName AS name
@@ -652,6 +726,45 @@ def _read_unmapped_codes(client, aliases):
     return list(merged.values())
 
 
+def media_snapshot_expr(table: str) -> str:
+    """
+    SQL for the media snapshot to read: the newest snapshot whose load finished successfully
+    (load_registry 'media_snapshot' SUCCESS row), so a half-finished load is never used.
+    Falls back to the newest snapshot in the table when the log has no such row.
+    """
+    reg = config.table_id(config.DATASET_RAW, config.LOAD_REGISTRY_TABLE)
+    return (f"COALESCE((SELECT SAFE.PARSE_DATE('%Y%m%d', delivery) FROM `{reg}` "
+            f"WHERE source = 'media_snapshot' AND status = 'SUCCESS' "
+            f"ORDER BY finished_at DESC LIMIT 1), "
+            f"(SELECT MAX(_snapshot_date) FROM `{_raw(table)}`))")
+
+
+def _read_amazon(client, ids) -> tuple[dict, set[str], str]:
+    """
+    First Amazon revenue week per film and the missing Amazon weeks (owned by the Amazon MMT
+    Pipeline). Returns ({imdb: row}, missing_week_starts, note). Never fails the review: if the
+    tables cannot be read, the check is left out and the note says why.
+    """
+    try:
+        rows = _rows(client, f"""
+            SELECT imdb_id, first_revenue_week, first_week_over_threshold,
+                   first_threshold_week_avg_price, first_revenue_week_quality, usable_as_evidence
+            FROM `{config.AMAZON_FIRST_REVENUE_TABLE}` WHERE imdb_id IN UNNEST(@ids)""",
+            [bigquery.ArrayQueryParameter("ids", "STRING", sorted(ids))])
+        weeks = _rows(client, f"SELECT * FROM `{config.AMAZON_WEEK_QUALITY_TABLE}`")
+    except GoogleAPIError as exc:
+        msg = getattr(exc, "message", None) or str(exc)
+        return {}, set(), f"Amazon check left out (could not read the Amazon tables: {msg[:200]})"
+    missing = set()
+    for w in weeks:
+        status = text(next((w[k] for k in w if k.lower() == "status"), "")).upper()
+        week = next((w[k] for k in ("week_start", "week_start_date", "amazon_week", "week")
+                     if k in w), None)
+        if status == "MISSING" and parse_date(week):
+            missing.add(parse_date(week))
+    return {r["imdb_id"]: r for r in rows}, missing, ""
+
+
 def _read_unmapped_pids(client, titles, aliases):
     t = config.REVENUE_RAW_TABLE
     sql = f"""
@@ -678,9 +791,11 @@ def gather(client=None) -> dict:
     chtt = _read_chtt(client, titles)
     dates = date_differences(titles, enrichment, chtt)
     pids = _read_unmapped_pids(client, titles, aliases)
-    items = build_items(codes, titles, enrichment, dates, pids, _read_rejections(client))
+    amazon, missing, amazon_note = _read_amazon(client, titles)
+    items = build_items(codes, titles, enrichment, dates, pids, _read_rejections(client),
+                        genre_differences(titles, enrichment), amazon, missing)
     return {"titles": titles, "aliases": aliases, "enrichment": enrichment, "chtt": chtt,
-            "items": items}
+            "items": items, "amazon_note": amazon_note}
 
 
 def _json_rows(rows, schema):
@@ -765,12 +880,14 @@ def run(dry_run: bool = True, root: str | Path | None = None) -> dict:
     client = bq_client()
     g = gather(client)
     waiting = returned_workbooks(folders["returned"])
-    result = {"counts": section_counts(g["items"]), "changes": [], "problems": [],
+    result = {"counts": section_counts(g["items"]), "amazon_note": g["amazon_note"],
+              "changes": [], "problems": [],
               "skipped": [], "history_rows": 0, "workbook": None, "moved_to": None,
               "waiting": [p.name for p in waiting[1:]], "folders": {k: str(v) for k, v in
                                                                    folders.items()}}
     if not waiting:
-        result["workbook"] = W.write_workbook(g["items"], g["titles"], folders["issued"]).name
+        result["workbook"] = W.write_workbook(g["items"], g["titles"], folders["issued"],
+                                              g["aliases"]).name
         result["status"] = "ISSUED"
         return result
     path = waiting[0]
@@ -787,6 +904,7 @@ def run(dry_run: bool = True, root: str | Path | None = None) -> dict:
     else:
         if plan.changes:
             result["history_rows"] = _apply(client, plan)
+            result["counts"] = section_counts(gather(client)["items"])   # the list after saving
         result["moved_to"] = move_to_imported(path, folders["imported"]).name
         result["status"] = "APPLIED" if plan.changes else "IMPORTED_NOTHING"
     return result
@@ -832,7 +950,9 @@ def status_markdown(result: dict):
 
     c = result["counts"]
     counts = (f"On the review list now: **{c[1]}** product codes, **{c[2]}** review notes, "
-              f"**{c[3]}** dates, **{c[4]}** product IDs.")
+              f"**{c[3]}** dates, **{c[4]}** product IDs, **{c.get(5, 0)}** NBC genres.")
+    if result.get("amazon_note"):
+        counts += f"  \nℹ️ {result['amazon_note']}"
     n, status, name = len(result["changes"]), result["status"], result["workbook"]
     upload = ("**Where to upload it:** " + where_to_find("returned")
               + "  \nUse the **Upload files** button on that page. If a copy with the same name "
@@ -842,7 +962,8 @@ def status_markdown(result: dict):
         body = (f"**File:** `{name}`\n\n**Where to find it:** {where_to_find('issued')}  \n"
                 "Click the file name to download it.\n\n"
                 "**What to do in Excel:** work through the numbered tabs (1 · Product codes, "
-                "2 · Flagged films, 3 · Dates, 4 · Revenue product IDs). Each tab starts with a "
+                "2 · Flagged films, 3 · Dates, 4 · Revenue product IDs, 5 · NBC genre). Each tab "
+                "starts with a "
                 "blue box that says what the problem is and what each choice does. Fill in only "
                 "the yellow columns, with a **Reason** for every row you decide. Save it as .xlsx "
                 "(keep the name).\n\n"

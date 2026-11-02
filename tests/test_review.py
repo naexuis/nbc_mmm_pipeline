@@ -258,7 +258,15 @@ class _FakeClient:
         self.history = list(history)
 
     def query(self, sql, job_config=None):
-        if "title_history" in sql:
+        if "film_first_revenue" in sql:
+            rows = [{"imdb_id": "tt1262426", "first_revenue_week": "2024-12-29",
+                     "first_week_over_threshold": "2024-12-29",
+                     "first_threshold_week_avg_price": 24.5,
+                     "first_revenue_week_quality": "DELIVERED", "usable_as_evidence": True}]
+        elif "amazon_week_quality" in sql:
+            rows = [{"week_start": "2024-12-22", "status": "MISSING"},
+                    {"week_start": "2024-12-29", "status": "DELIVERED"}]
+        elif "title_history" in sql:
             rows = self.history
         elif "title_alias" in sql:
             rows = list(ALIASES.values())
@@ -432,3 +440,113 @@ def test_deciding_a_date_turns_down_the_other_sources():
     after = dict(TITLES, tt1262426=dict(TITLES["tt1262426"], pvod_date="2024-12-25"))
     again = R.build_items([], after, enrich, R.date_differences(after, enrich, chtt), [], rejected)
     assert not any(i["section"] == 3 for i in again)
+
+
+def test_amazon_check_wording():
+    ev = {"first_revenue_week": "2024-12-22", "first_week_over_threshold": "2024-12-22",
+          "first_threshold_week_avg_price": 21.76, "first_revenue_week_quality": "DELIVERED",
+          "usable_as_evidence": True}
+    assert R.amazon_check("2024-12-24", ev).endswith("date fits")
+    assert "premium purchase" in R.amazon_check("2024-12-24", ev)
+    assert "42 days after" in R.amazon_check("2025-02-02", ev)
+    assert "days before" in R.amazon_check("2024-11-01", ev)
+    assert R.amazon_check("2024-12-24", None) == ""
+    assert "no evidence" in R.amazon_check("2024-12-24", dict(ev, usable_as_evidence=False))
+    partial = dict(ev, first_revenue_week="2025-05-04", first_week_over_threshold="2025-06-15",
+                   first_revenue_week_quality="PARTIAL", first_threshold_week_avg_price=24.99)
+    text_ = R.amazon_check("2025-05-06", partial)          # Sneaks: compare with first week
+    assert "2025-05-04" in text_ and "partial week" in text_ and text_.endswith("date fits")
+    assert "missing" in R.amazon_check("2024-12-24", ev, {"2024-12-15"})
+
+
+def test_genre_items_and_decisions():
+    enrich = {"tt1262426": {"master_genre_1": "Musical", "master_genre_2": "", "title_name": "W"}}
+    genres = R.genre_differences(TITLES, enrich)
+    assert [(g["field"], g["new"]) for g in genres] == [("nbc_genre_1", "MUSICAL")]
+    items = R.build_items([], TITLES, enrich, [], [], genres=genres)
+    g = next(i for i in items if i["section"] == 5)
+    assert g["key"] == "genre|tt1262426|nbc_genre_1" and g["show"]["now"] == "(none)"
+    p = R.plan_from_workbook({"review": [_row(g, 3, "approve")]}, items, TITLES, ALIASES, enrich)
+    assert {(c["key"], c["field"]): c["new"] for c in p.changes} == {
+        ("tt1262426", "nbc_genre_1"): "MUSICAL"}
+    p = R.plan_from_workbook({"change_films": [{"row": 3, "film": "tt1262426",
+                                                "field": "nbc_genre_2", "new_value": "drama",
+                                                "reason": "x"}]}, [], TITLES, ALIASES, enrich)
+    assert p.changes[0]["new"] == "DRAMA"
+
+
+def test_dates_tab_shows_amazon_check(tmp_path):
+    import openpyxl
+
+    from us_hment_mmm.reference import review_workbook as W
+
+    dates = [{"imdb_id": "tt1262426", "title_name": "WICKED", "in_mmm": None,
+              "field": "pvod_date", "current": "2024-12-31", "new": "2024-12-30",
+              "source": "NBC"}]
+    amazon = {"tt1262426": {"first_revenue_week": "2024-12-29",
+                            "first_week_over_threshold": "2024-12-29",
+                            "first_threshold_week_avg_price": 6.5,
+                            "first_revenue_week_quality": "DELIVERED",
+                            "usable_as_evidence": True}}
+    items = R.build_items([], TITLES, ENRICH, dates, [], amazon=amazon)
+    path = W.write_workbook(items, TITLES, tmp_path, ALIASES)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["3 · Dates"]
+    header = [c.value for c in ws[2]]
+    cell = ws.cell(3, header.index("Amazon check") + 1).value
+    assert "2024-12-29" in cell and "rental" in cell and cell.endswith("date fits")
+    films = wb["Films now"]
+    fh = [c.value for c in films[2]]
+    rows = {films.cell(r, 1).value: r for r in range(3, films.max_row + 1)}
+    codes = films.cell(rows["tt12921446"], fh.index("Media product codes") + 1).value
+    assert codes == "UP_HE:SSS"
+    assert "5 · NBC genre" in wb.sheetnames
+
+
+def test_film_links_lists_product_ids_and_codes():
+    from us_hment_mmm.reference import review_workbook as W
+
+    aliases = dict(ALIASES)
+    aliases[("revenue_product_id", None, "123")] = {"imdb_id": "tt12921446", "category": "film"}
+    aliases[("media_product_code", "UP_HE", "DFT")] = {"imdb_id": None, "category": "non_film"}
+    links = W.film_links(aliases)
+    assert links["tt12921446"] == {"_pids": ["123"], "_codes": ["UP_HE:SSS"]}
+
+
+def test_amazon_tables_unreadable_is_a_note_not_an_error():
+    from google.api_core.exceptions import GoogleAPIError
+
+    class NoAmazon(_FakeClient):
+        def query(self, sql, job_config=None):
+            if "UPNA_client_he_amazon_mmt_dev" in sql:
+                raise GoogleAPIError("Access Denied")
+            return super().query(sql, job_config)
+
+    g = R.gather(NoAmazon())
+    assert "Amazon check left out" in g["amazon_note"]
+    assert g["items"]
+
+
+def test_product_code_rows_are_labelled_by_code(tmp_path):
+    import openpyxl
+
+    from us_hment_mmm.reference import review_workbook as W
+
+    path = W.write_workbook(_items(), TITLES, tmp_path)
+    wb = openpyxl.load_workbook(path)
+    _decide(wb["1 · Product codes"], "Focus", "SEN", "Accept", "ok")
+    wb.save(path)
+    data, _ = W.read_workbook(path)
+    assert data["review"][0]["label"] == "Focus SEN"
+
+
+def test_view_sql_mentions_every_field():
+    from us_hment_mmm.reference import views as V
+
+    sql = V.as_of_sql()
+    for f in V.COMPARE_FIELDS:
+        assert f" AS {f}" in sql
+    assert "changed_at <= as_of" in sql
+    assert "revenue_product_ids" in V.detail_sql()
+    assert "IS DISTINCT FROM" in V.check_sql()
+    assert "ADD COLUMN IF NOT EXISTS nbc_genre_1" in V.upgrade_sql()

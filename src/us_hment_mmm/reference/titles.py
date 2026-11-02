@@ -43,6 +43,8 @@ TITLE_SCHEMA = [
     bigquery.SchemaField("release_date", "DATE"),
     bigquery.SchemaField("pvod_date", "DATE"),
     bigquery.SchemaField("est_date", "DATE"),
+    bigquery.SchemaField("nbc_genre_1", "STRING"),   # NBC master genre (from enrichment, reviewed)
+    bigquery.SchemaField("nbc_genre_2", "STRING"),
     bigquery.SchemaField("in_mmm", "BOOL"),
     bigquery.SchemaField("in_mmm_reason", "STRING"),
     bigquery.SchemaField("review_note", "STRING"),

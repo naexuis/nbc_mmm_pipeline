@@ -129,6 +129,11 @@ TITLE_HISTORY_TABLE = "title_history"  # every change: who, when, why, old -> ne
 #   imported/  workbooks already saved to BigQuery
 REVIEW_DIR = "/domino/datasets/local/nbcu_mmm_dev/us_hment_mmm/review/titles"
 
+# ---- Shared tables owned by other projects (see DATA_OWNERS.md) ----------------
+# Amazon MMT Pipeline: first week each film earned Amazon revenue, and Amazon week quality.
+AMAZON_FIRST_REVENUE_TABLE = f"{PROJECT_ID}.UPNA_client_he_amazon_mmt_dev.film_first_revenue"
+AMAZON_WEEK_QUALITY_TABLE = f"{PROJECT_ID}.UPNA_client_he_amazon_mmt_dev.amazon_week_quality"
+
 # ---- Run log ---------------------------------------------------------------
 # One row per load attempt (any source), kept in the raw dataset.
 LOAD_REGISTRY_TABLE = "load_registry"

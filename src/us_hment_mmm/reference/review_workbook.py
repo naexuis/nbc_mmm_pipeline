@@ -63,10 +63,13 @@ REVIEW_TABS = {
         "NBC or Finance has a date that differs from the current date (the date the model uses "
         "now, or empty if there is none yet). Accept replaces the current date with the proposed "
         "date. Keep as is keeps the current date (you will not be asked about this proposed date "
-        "again). Use my answer lets you type the right date (like 2026-06-30) under Your answer.",
+        "again). Use my answer lets you type the right date (like 2026-06-30) under Your answer.\n"
+        "Amazon check (PVOD rows): when the Amazon MMT team's data has the film, it shows the "
+        "first week of Amazon sales and whether the proposed date fits it. It is a hint only.",
         [("Film", "film", 34), ("IMDb ID", "imdb_id", 13), ("In MMM", "in_mmm", 12),
          ("Date", "date_type", 13), ("Current date (used now)", "now", 14),
-         ("Proposed date", "proposed", 14), ("From", "source", 14), ("Decision", "decision", 15),
+         ("Proposed date", "proposed", 14), ("From", "source", 14),
+         ("Amazon check", "amazon", 44), ("Decision", "decision", 15),
          ("Your answer (date)", "answer", 14), ("Reason", "reason", 40)],
         CHOICES),
     4: ("4 · Revenue product IDs",
@@ -79,6 +82,15 @@ REVIEW_TABS = {
          ("NBC tags it as", "tagged", 34), ("Proposed fix", "proposed", 40), ("Why", "why", 46),
          ("Decision", "decision", 15), ("Your answer (IMDb ID)", "answer", 18),
          ("Reason", "reason", 40)],
+        CHOICES),
+    5: ("5 · NBC genre",
+        "NBC's master genre for these films differs from the film's current genre (or the film "
+        "has none yet). Accept uses NBC's genre. Keep as is keeps the current genre (you will "
+        "not be asked about this NBC genre again). Use my answer lets you type a genre.",
+        [("Film", "film", 34), ("IMDb ID", "imdb_id", 13), ("In MMM", "in_mmm", 12),
+         ("Genre", "genre_type", 12), ("Current genre", "now", 22),
+         ("NBC genre", "proposed", 22), ("Decision", "decision", 15),
+         ("Your answer (genre)", "answer", 22), ("Reason", "reason", 40)],
         CHOICES),
 }
 INPUT_FIELDS = {"decision", "answer", "reason"}
@@ -138,6 +150,7 @@ READ_ME = [
     "  2 · Flagged films        films with a problem found when the title table was built",
     "  3 · Dates                NBC or Finance dates that differ from the current date",
     "  4 · Revenue product IDs  revenue codes not linked to a film yet",
+    "  5 · NBC genre            NBC master genres that differ from the film's genre",
     "  Add films / Change films / Map codes / Map product IDs   fixes you type by hand",
     "  Films now                the current film list, to look up IMDb IDs (not read back)",
     "",
@@ -172,7 +185,8 @@ def _dropdown(ws, choices, col_letter, last_row):
     dv.add(f"{col_letter}3:{col_letter}{max(last_row, 3)}")
 
 
-def write_workbook(items: list[dict], titles: dict, folder: str | Path | None = None) -> Path:
+def write_workbook(items: list[dict], titles: dict, folder: str | Path | None = None,
+                   aliases: dict | None = None) -> Path:
     folder = Path(folder or config.REVIEW_DIR)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"title-review-{datetime.now():%Y%m%dT%H%M%S}.xlsx"
@@ -231,21 +245,45 @@ def write_workbook(items: list[dict], titles: dict, folder: str | Path | None = 
     ws = wb.create_sheet("Films now")
     cols = [("IMDb ID", "imdb_id", 14), ("Title", "title_name", 36),
             ("Distributor", "distributor", 18), ("Release", "release_date", 12),
-            ("PVOD", "pvod_date", 12), ("EST", "est_date", 12), ("In MMM", "in_mmm", 9),
-            ("In MMM reason", "in_mmm_reason", 40), ("Review note", "review_note", 50)]
-    _banner_and_header(ws, "The film list as it is today, to look up IMDb IDs and dates. "
-                       "Reference only: changes made here are not read.", cols)
+            ("PVOD", "pvod_date", 12), ("EST", "est_date", 12),
+            ("NBC genre 1", "nbc_genre_1", 16), ("NBC genre 2", "nbc_genre_2", 16),
+            ("In MMM", "in_mmm", 9), ("In MMM reason", "in_mmm_reason", 40),
+            ("Revenue product IDs", "_pids", 22), ("Media product codes", "_codes", 22),
+            ("Review note", "review_note", 50)]
+    _banner_and_header(ws, "The film list as it is today, to look up IMDb IDs, dates, genres and "
+                       "the product IDs and codes linked to each film. Reference only: changes "
+                       "made here are not read.", cols)
+    links = film_links(aliases or {})
     for i, t in enumerate(sorted(titles.values(), key=lambda t: t["title_name"]), start=3):
         for j, (_h, field, _w) in enumerate(cols, start=1):
-            v = t.get(field)
+            if field in ("_pids", "_codes"):
+                v = ", ".join(links.get(t["imdb_id"], {}).get(field, []))
+            else:
+                v = t.get(field)
             if field == "in_mmm":
                 v = {True: "yes", False: "no"}.get(v, "")
             ws.cell(row=i, column=j, value=R.text(v)).number_format = "@"
-    ws.auto_filter.ref = f"A2:I{max(len(titles) + 2, 3)}"
+    last_col = ws.cell(row=2, column=len(cols)).column_letter
+    ws.auto_filter.ref = f"A2:{last_col}{max(len(titles) + 2, 3)}"
 
     wb.active = 1
     wb.save(path)
     return path
+
+
+def film_links(aliases: dict) -> dict[str, dict[str, list[str]]]:
+    """{imdb: {'_pids': [product ids], '_codes': ['UP_HE:ABC', ...]}} from title_alias rows."""
+    out: dict[str, dict[str, list[str]]] = {}
+    for (alias_type, group, value), row in sorted(aliases.items(), key=lambda kv: str(kv[0])):
+        imdb = row.get("imdb_id")
+        if not imdb or row.get("category") != "film":
+            continue
+        d = out.setdefault(imdb, {"_pids": [], "_codes": []})
+        if alias_type == "revenue_product_id":
+            d["_pids"].append(value)
+        elif alias_type == "media_product_code":
+            d["_codes"].append(f"{group}:{value}")
+    return out
 
 
 def _rows(ws, cols, tab, problems, required=None):
@@ -275,10 +313,9 @@ def read_workbook(path: str | Path) -> tuple[dict, list[str]]:
         return {}, [f"The workbook could not be opened ({exc}). Was it saved as .xlsx?"]
     data: dict[str, list[dict]] = {"review": []}
 
-    for _section, (tab, _banner, cols, _choices) in REVIEW_TABS.items():
+    for section, (tab, _banner, cols, _choices) in REVIEW_TABS.items():
         if tab not in wb.sheetnames:
-            problems.append(f"The '{tab}' tab is missing. Use a workbook issued by the notebook.")
-            continue
+            continue            # a workbook issued before this tab existed: nothing to read
         label_field = cols[0][1]
         for n, row in _rows(wb[tab], cols + [(ID_HEADER, "_id", 0)], tab, problems,
                             required=INPUT_FIELDS | {"_id"}):
@@ -287,7 +324,9 @@ def read_workbook(path: str | Path) -> tuple[dict, list[str]]:
                 continue
             data["review"].append({
                 "row": n, "tab": tab, "key": R.text(row.get("_id")),
-                "label": R.text(row.get(label_field)), "raw_decision": raw,
+                "label": (f"{R.text(row.get('business'))} {R.text(row.get('code'))}".strip()
+                          if section == 1 else R.text(row.get(label_field))),
+                "raw_decision": raw,
                 "decision": DECISION_MAP.get(raw.lower(), raw.lower()),
                 "use_instead": row.get("answer"), "reason": row.get("reason")})
 
