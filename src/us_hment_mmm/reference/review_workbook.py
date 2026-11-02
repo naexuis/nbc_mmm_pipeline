@@ -102,6 +102,15 @@ REVIEW_TABS = {
          ("Decision", "decision", 15), ("Your answer (distributor)", "answer", 24),
          ("Reason", "reason", 40)],
         CHOICES),
+    7: ("7 · IMDb genres",
+        "IMDb genres for these films differ from the film's current IMDb genres (or it has none "
+        "yet). Accept uses the proposed list. Keep as is keeps the current list. Use my answer "
+        "lets you type the full list, separated by commas (like Comedy, Drama, Family).",
+        [("Film", "film", 34), ("IMDb ID", "imdb_id", 13), ("In MMM", "in_mmm", 12),
+         ("Current IMDb genres", "now", 30), ("Proposed IMDb genres", "proposed", 36),
+         ("From", "source", 26), ("Decision", "decision", 15),
+         ("Your answer (genres)", "answer", 30), ("Reason", "reason", 40)],
+        CHOICES),
 }
 INPUT_FIELDS = {"decision", "answer", "reason"}
 
@@ -162,6 +171,7 @@ READ_ME = [
     "  4 · Revenue product IDs  revenue codes not linked to a film yet",
     "  5 · NBC genre            NBC master genres that differ from the film's genre",
     "  6 · Distributor          distributors to put in their standard spelling",
+    "  7 · IMDb genres          IMDb genre lists to add or update",
     "  Add films / Change films / Map codes / Map product IDs   fixes you type by hand",
     "  Films now                the current film list, to look up IMDb IDs (not read back)",
     "",
@@ -258,6 +268,7 @@ def write_workbook(items: list[dict], titles: dict, folder: str | Path | None = 
             ("Distributor", "distributor", 18), ("Release", "release_date", 12),
             ("PVOD", "pvod_date", 12), ("EST", "est_date", 12),
             ("NBC genre 1", "nbc_genre_1", 16), ("NBC genre 2", "nbc_genre_2", 16),
+            ("IMDb genres", "imdb_genres", 30),
             ("In MMM", "in_mmm", 9), ("In MMM reason", "in_mmm_reason", 40),
             ("Revenue product IDs", "_pids", 22), ("Media product codes", "_codes", 22),
             ("Review note", "review_note", 50)]

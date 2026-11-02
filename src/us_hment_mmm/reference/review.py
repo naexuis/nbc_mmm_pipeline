@@ -47,11 +47,16 @@ MIN_YEAR = 1950
 GENRE_FIELDS = ("nbc_genre_1", "nbc_genre_2")
 GENRE_LABELS = {"nbc_genre_1": "NBC genre 1", "nbc_genre_2": "NBC genre 2"}
 SETTABLE_FIELDS = ("title_name", "distributor", "release_date", "pvod_date", "est_date",
-                   "nbc_genre_1", "nbc_genre_2",
+                   "nbc_genre_1", "nbc_genre_2", "imdb_genres",
                    "in_mmm", "review_note")
 FIELD_LABELS = {"release_date": "Release", "pvod_date": "PVOD", "est_date": "EST"}
 SECTION_NAMES = {1: "Product code", 2: "Review note", 3: "Date", 4: "Product ID",
-                 5: "NBC genre", 6: "Distributor"}
+                 5: "NBC genre", 6: "Distributor", 7: "IMDb genres"}
+IMDB_GENRE_FILE = "universal_genre_mapping.json"     # in reference_seed/ (IMDb website genres)
+IMDB_WEBSITE_SOURCE = "IMDb website (genre file)"
+IMDB_BASICS_PATTERN = "imdb_genres_title_basics_*.csv"   # from the Amazon MMT Pipeline
+IMDB_BASICS_SOURCE = "IMDb title.basics"
+HAND_SOURCE = "entered by hand"
 DECISIONS = ("Approve", "Use instead", "Reject")
 REVIEW_TABLE = "review_decision"   # table_name used in title_history for rejected suggestions
 NO_SUGGESTION = "—"
@@ -238,6 +243,39 @@ def distributor_differences(titles: dict, enrichment: dict) -> list[dict]:
     return out
 
 
+def genre_list(value) -> str | None:
+    """'drama,  Comedy;sci-fi' -> 'Comedy, Drama, Sci-Fi' (sorted, one spelling per genre)."""
+    parts = [p.strip() for p in re.split(r"[,;|]", text(value)) if p.strip()]
+    fixed = {"SCIFI": "Sci-Fi", "SCI-FI": "Sci-Fi", "BASKETALL": "Basketball"}
+    out = sorted({fixed.get(p.upper().replace(" ", ""), p.title()) for p in parts})
+    return ", ".join(out) or None
+
+
+def imdb_genres_from_file(data: dict) -> dict[str, str]:
+    """{imdb_id: 'Adventure, Animation, ...'} from the is_* flags of universal_genre_mapping.json."""
+    out = {}
+    for v in data.values():
+        flags = [k[3:] for k, on in v.items() if k.startswith("is_") and on is True]
+        g = genre_list(",".join(flags))
+        if v.get("imdb_id") and g:
+            out[v["imdb_id"]] = g
+    return out
+
+
+def imdb_genre_differences(titles: dict, proposals: dict[str, tuple[str, str]]) -> list[dict]:
+    """proposals = {imdb: (genre list, source)}; rows where it differs from the film's list."""
+    out = []
+    for imdb, (genres, source) in proposals.items():
+        t = titles.get(imdb)
+        if t is None or genre_list(genres) == genre_list(t.get("imdb_genres")):
+            continue
+        out.append({"imdb_id": imdb, "title_name": t["title_name"], "in_mmm": t["in_mmm"],
+                    "current": t.get("imdb_genres"), "new": genre_list(genres), "source": source})
+    order = {True: 0, None: 1, False: 2}
+    out.sort(key=lambda d: (order[d["in_mmm"]], d["title_name"]))
+    return out
+
+
 def genre_differences(titles: dict, enrichment: dict) -> list[dict]:
     """NBC master genres that differ from the film's current genre (blank counts as different)."""
     out = []
@@ -296,7 +334,7 @@ def amazon_check(day: str | None, ev: dict | None, missing_weeks: set[str] = fro
 def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[dict],
                 pids: list[dict], rejected: set[tuple[str, str]] = frozenset(),
                 genres: list[dict] = (), amazon: dict | None = None,
-                distributors: list[dict] = (),
+                distributors: list[dict] = (), imdb_genres: list[dict] = (),
                 missing_weeks: set[str] = frozenset()) -> list[dict]:
     """
     The review list. Each item has a stable key, a 'current' and 'suggested' value (used to
@@ -372,6 +410,13 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
              "imdb_id": g["imdb_id"], "in_mmm": in_mmm_text[g["in_mmm"]],
              "genre_type": GENRE_LABELS[g["field"]], "now": g["current"] or "(none)",
              "proposed": g["new"]})
+    for d in imdb_genres:
+        add(7, f"imdbgenre|{d['imdb_id']}", d["current"] or "(none)", d["new"], d["source"],
+            {"imdb_id": d["imdb_id"], "field": "imdb_genres", "value": d["new"],
+             "source": d["source"]},
+            {"label": d["title_name"], "film": d["title_name"], "imdb_id": d["imdb_id"],
+             "in_mmm": in_mmm_text[d["in_mmm"]], "now": d["current"] or "(none)",
+             "proposed": d["new"], "source": d["source"]})
     for d in distributors:
         add(6, f"dist|{d['imdb_id']}", d["current"] or "(none)", d["new"], d["why"],
             {"imdb_id": d["imdb_id"], "field": "distributor", "value": d["new"]},
@@ -412,6 +457,7 @@ class Plan:
         self.new_titles: set[str] = set()
         self.reason = ""
         self.where = ""
+        self.genre_source: str | None = None   # source label for the next imdb_genres change
         self._set_by: dict[tuple, object] = {}
 
     # -- low level -------------------------------------------------------------
@@ -494,11 +540,19 @@ class Plan:
                 value = value.upper()
             if field == "distributor":
                 value = standard_distributor(value)
+            if field == "imdb_genres":
+                value = genre_list(value)
         row = self.titles[imdb]
         self._record(config.TITLE_TABLE, imdb, field, row.get(field), value)
         row[field] = value
         if field in DATE_FIELDS:
             self._settle_date(imdb, field, value)
+        if field == "imdb_genres":
+            source = self.genre_source or HAND_SOURCE
+            self._record(config.TITLE_TABLE, imdb, "imdb_genres_source",
+                         row.get("imdb_genres_source"), source if value else None)
+            row["imdb_genres_source"] = source if value else None
+            self.genre_source = None
         if field == "in_mmm":
             self._record(config.TITLE_TABLE, imdb, "in_mmm_reason", row.get("in_mmm_reason"),
                          self.reason)
@@ -589,6 +643,9 @@ class Plan:
             self.map_code(t["group"], t["code"], value, t["label"])
         elif section == 2:
             self.set_value(t["imdb_id"], "review_note", value)
+        elif section == 7:
+            self.genre_source = t["source"] if decision == "approve" else HAND_SOURCE
+            self.set_value(t["imdb_id"], "imdb_genres", value)
         elif section in (3, 5, 6):
             self.set_value(t["imdb_id"], t["field"], value)
         else:
@@ -784,6 +841,40 @@ def media_snapshot_expr(table: str) -> str:
             f"(SELECT MAX(_snapshot_date) FROM `{_raw(table)}`))")
 
 
+def basics_genres_from_csv(path) -> dict[str, tuple[str, str]]:
+    """{imdb: (genres, source)} from the Amazon MMT Pipeline's IMDb title.basics CSV."""
+    import csv
+
+    out = {}
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        for r in csv.DictReader(fh):
+            g = genre_list(r.get("genres"))
+            if r.get("imdb_id") and g:
+                snap = text(r.get("snapshot_id"))[:12] or "unknown"
+                out[r["imdb_id"].strip()] = (g, f"{IMDB_BASICS_SOURCE}, snapshot {snap}")
+    return out
+
+
+def _imdb_genre_proposals(seed_dir=None) -> dict[str, tuple[str, str]]:
+    """
+    IMDb genre lists to propose, from reference_seed/:
+      - the IMDb website genre file (finer tags; wins where a film is in both), and
+      - the newest IMDb title.basics CSV from the Amazon MMT Pipeline (basic genres).
+    """
+    import json
+
+    seed_dir = seed_dir or T.SEED_DIR
+    out: dict[str, tuple[str, str]] = {}
+    basics = sorted(seed_dir.glob(IMDB_BASICS_PATTERN))
+    if basics:
+        out.update(basics_genres_from_csv(basics[-1]))
+    path = seed_dir / IMDB_GENRE_FILE
+    if path.exists():
+        data = json.loads(path.read_text())
+        out.update({k: (v, IMDB_WEBSITE_SOURCE) for k, v in imdb_genres_from_file(data).items()})
+    return out
+
+
 def _read_amazon(client, ids) -> tuple[dict, set[str], str]:
     """
     First Amazon revenue week per film and the missing Amazon weeks (owned by the Amazon MMT
@@ -840,7 +931,8 @@ def gather(client=None) -> dict:
     items = build_items(codes, titles, enrichment, dates, pids, _read_rejections(client),
                         genres=genre_differences(titles, enrichment), amazon=amazon,
                         missing_weeks=missing,
-                        distributors=distributor_differences(titles, enrichment))
+                        distributors=distributor_differences(titles, enrichment),
+                        imdb_genres=imdb_genre_differences(titles, _imdb_genre_proposals()))
     return {"titles": titles, "aliases": aliases, "enrichment": enrichment, "chtt": chtt,
             "items": items, "amazon_note": amazon_note}
 
@@ -998,7 +1090,7 @@ def status_markdown(result: dict):
     c = result["counts"]
     counts = (f"On the review list now: **{c[1]}** product codes, **{c[2]}** review notes, "
               f"**{c[3]}** dates, **{c[4]}** product IDs, **{c.get(5, 0)}** NBC genres, "
-              f"**{c.get(6, 0)}** distributors.")
+              f"**{c.get(6, 0)}** distributors, **{c.get(7, 0)}** IMDb genre lists.")
     if result.get("amazon_note"):
         counts += f"  \nℹ️ {result['amazon_note']}"
     n, status, name = len(result["changes"]), result["status"], result["workbook"]
@@ -1011,7 +1103,7 @@ def status_markdown(result: dict):
                 "Click the file name to download it.\n\n"
                 "**What to do in Excel:** work through the numbered tabs (1 · Product codes, "
                 "2 · Flagged films, 3 · Dates, 4 · Revenue product IDs, 5 · NBC genre, "
-                "6 · Distributor). Each tab "
+                "6 · Distributor, 7 · IMDb genres). Each tab "
                 "starts with a "
                 "blue box that says what the problem is and what each choice does. Fill in only "
                 "the yellow columns, with a **Reason** for every row you decide. Save it as .xlsx "

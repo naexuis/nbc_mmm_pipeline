@@ -22,10 +22,12 @@ from us_hment_mmm.gcp import bq_client
 
 AS_OF_FUNCTION = "title_as_of"
 DETAIL_VIEW = "title_detail"
-TEXT_FIELDS = ("title_name", "distributor", "nbc_genre_1", "nbc_genre_2", "in_mmm_reason",
+TEXT_FIELDS = ("title_name", "distributor", "nbc_genre_1", "nbc_genre_2", "imdb_genres",
+               "imdb_genres_source", "in_mmm_reason",
                "review_note")
 DATE_FIELDS = ("release_date", "pvod_date", "est_date")
 COMPARE_FIELDS = ("title_name", "distributor", *DATE_FIELDS, "nbc_genre_1", "nbc_genre_2",
+                  "imdb_genres", "imdb_genres_source",
                   "in_mmm", "in_mmm_reason", "review_note")
 
 
@@ -39,7 +41,8 @@ def as_of_sql() -> str:
     cols = (["imdb_id"]
             + [f"{pick(f)} AS {f}" for f in ("title_name", "distributor")]
             + [f"SAFE_CAST({pick(f)} AS DATE) AS {f}" for f in DATE_FIELDS]
-            + [f"{pick(f)} AS {f}" for f in ("nbc_genre_1", "nbc_genre_2")]
+            + [f"{pick(f)} AS {f}" for f in ("nbc_genre_1", "nbc_genre_2", "imdb_genres",
+                                             "imdb_genres_source")]
             + [f"CASE LOWER({pick('in_mmm')}) WHEN 'true' THEN TRUE WHEN 'false' THEN FALSE "
                f"END AS in_mmm"]
             + [f"{pick(f)} AS {f}" for f in ("in_mmm_reason", "review_note")])
@@ -89,7 +92,8 @@ WHERE t.imdb_id IS NULL OR h.imdb_id IS NULL OR {diffs}
 
 def upgrade_sql() -> str:
     """Add columns introduced after the seed (safe to repeat)."""
-    adds = ", ".join(f"ADD COLUMN IF NOT EXISTS {f} STRING" for f in ("nbc_genre_1", "nbc_genre_2"))
+    adds = ", ".join(f"ADD COLUMN IF NOT EXISTS {f} STRING"
+                     for f in ("nbc_genre_1", "nbc_genre_2", "imdb_genres", "imdb_genres_source"))
     return f"ALTER TABLE `{_core(config.TITLE_TABLE)}` {adds}"
 
 

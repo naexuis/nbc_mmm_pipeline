@@ -579,3 +579,49 @@ def test_distributor_items_rename_and_fill():
                                                 "field": "distributor", "new_value": "bleecker st",
                                                 "reason": "x"}]}, [], titles, ALIASES, enrich)
     assert p.changes[0]["new"] == "BLEECKER STREET"
+
+
+def test_genre_list_normalises():
+    assert R.genre_list("drama,  comedy;SciFi") == "Comedy, Drama, Sci-Fi"
+    assert R.genre_list("") is None
+
+
+def test_imdb_genres_from_the_genre_file():
+    import json
+
+    from us_hment_mmm.reference import titles
+
+    data = json.loads((titles.SEED_DIR / R.IMDB_GENRE_FILE).read_text())
+    genres = R.imdb_genres_from_file(data)
+    assert len(genres) == 95
+    assert genres["tt6467266"] == "Adventure, Animation, Comedy, Family, Musical"   # Sing 2
+
+
+def test_imdb_genre_items_set_list_and_source():
+    proposals = {"tt1262426": ("Fantasy, Musical, Romance", "IMDb website (genre file)")}
+    diffs = R.imdb_genre_differences(TITLES, proposals)
+    items = R.build_items([], TITLES, ENRICH, [], [], imdb_genres=diffs)
+    it = next(i for i in items if i["section"] == 7)
+    p = R.plan_from_workbook({"review": [_row(it, 3, "approve")]}, items, TITLES, ALIASES, ENRICH)
+    got = {c["field"]: c["new"] for c in p.changes}
+    assert got == {"imdb_genres": "Fantasy, Musical, Romance",
+                   "imdb_genres_source": "IMDb website (genre file)"}
+    p = R.plan_from_workbook({"review": [_row(it, 3, "use instead",
+                                              use_instead="musical, drama")]},
+                             items, TITLES, ALIASES, ENRICH)
+    got = {c["field"]: c["new"] for c in p.changes}
+    assert got == {"imdb_genres": "Drama, Musical", "imdb_genres_source": "entered by hand"}
+    # same list already stored: nothing proposed
+    same = dict(TITLES, tt1262426=dict(TITLES["tt1262426"], imdb_genres="Fantasy, Musical, Romance"))
+    assert R.imdb_genre_differences(same, proposals) == []
+
+
+def test_imdb_genre_proposals_combine_both_sources():
+    from us_hment_mmm.reference import titles
+
+    props = R._imdb_genre_proposals(titles.SEED_DIR)
+    assert len(props) == 406
+    assert props["tt6467266"][1] == "IMDb website (genre file)"                 # Sing 2
+    genres, source = props["tt15041836"]                                         # Werewolves
+    assert genres == "Action, Horror, Sci-Fi"
+    assert source == "IMDb title.basics, snapshot 958c5d393962"
