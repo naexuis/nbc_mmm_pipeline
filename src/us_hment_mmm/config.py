@@ -57,6 +57,24 @@ MEDIA_TV_CORE_TABLE = "media_tv_daily"           # NetPak + SpotPak spend per ne
 MEDIA_TV_CLIENTS = ("ZUE", "ZUV", "ZFF", "ZFE")
 MEDIA_SPOTPAK_NET_FACTOR = 0.85                  # SpotPak net cost = 0.85 x Gross_Cost
 
+# Channel labels: one row per Prisma placement or TV / audio / MVPD network code.
+CHANNEL_LABEL_TABLE = "channel_label"
+MEDIA_DAILY_VIEW = "media_daily"                 # all media with its channel label
+# Parent channels a label may start with (longest match wins, e.g. DISPLAY_VIDEO before VIDEO).
+CHANNEL_PARENTS = ("DISPLAY_VIDEO", "CTVOTT", "STREAMING", "PROGRAMMATIC", "SOCIAL", "SEARCH",
+                   "AUDIO", "OOH", "PRINT", "MVPD", "CABLE", "NETWORK", "SPOTTV", "LINEAR",
+                   "VIDEO", "FEE")
+CHANNEL_NEEDS_LABEL = "NEEDS A CHANNEL"
+# Network dictionary label -> MMM label where they differ (old ZUE notebook overrides).
+CHANNEL_MMM_OVERRIDES = {
+    "AUDIO_IHEART": "AUDIO_IHEART_RADIO",
+    "CABLE_COMEDYCENTRAL": "STREAMING_COMEDYCENTRAL",
+    "CABLE_NETFLIX": "STREAMING_NETFLIX",
+    "CABLE_THEDISCOVERYCHANNEL": "STREAMING_THEDISCOVERYCHANNEL",
+    "CABLE_WILLOW": "VIDEO_WILLOW",
+}
+CHANNEL_RADIO_MEDIA = ("SPOT RADIO", "NETWORK RADIO")
+
 # ---- Revenue source (exported by hand from NBC GCP) ------------------------
 REVENUE_BUCKET = "nbcu-marcus-hilliard"
 REVENUE_US_PREFIX = "hment_rev_usa/"
