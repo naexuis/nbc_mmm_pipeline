@@ -1097,7 +1097,14 @@ def status_markdown(result: dict):
     upload = ("**Where to upload it:** " + where_to_find("returned")
               + "  \nUse the **Upload files** button on that page. If a copy with the same name "
               "is already there, replace it.")
-    if status == "ISSUED":
+    if status == "ISSUED" and not any(c.values()):
+        head = "### ✅ Nothing needs a decision"
+        body = ("Every section of the review list is empty, so there is nothing to decide.\n\n"
+                f"A workbook was still made (`{name}`). It is only needed if you want to add or "
+                "change a film by hand (tabs Add films, Change films, Map codes, Map product IDs). "
+                "Otherwise you can ignore it.\n\n"
+                f"**Where to find it:** {where_to_find('issued')}")
+    elif status == "ISSUED":
         head = "### ✅ New workbook issued"
         body = (f"**File:** `{name}`\n\n**Where to find it:** {where_to_find('issued')}  \n"
                 "Click the file name to download it.\n\n"

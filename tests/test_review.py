@@ -625,3 +625,11 @@ def test_imdb_genre_proposals_combine_both_sources():
     genres, source = props["tt15041836"]                                         # Werewolves
     assert genres == "Action, Horror, Sci-Fi"
     assert source == "IMDb title.basics, snapshot 958c5d393962"
+
+
+def test_status_when_nothing_needs_a_decision():
+    from us_hment_mmm.reference.review import status_markdown
+    result = {"counts": {s: 0 for s in range(1, 8)}, "changes": [], "status": "ISSUED",
+              "workbook": "title-review-x.xlsx", "skipped": []}
+    text = status_markdown(result).data
+    assert "Nothing needs a decision" in text and "add or change a film by hand" in text
