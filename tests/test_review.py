@@ -633,3 +633,30 @@ def test_status_when_nothing_needs_a_decision():
               "workbook": "title-review-x.xlsx", "skipped": []}
     text = status_markdown(result).data
     assert "Nothing needs a decision" in text and "add or change a film by hand" in text
+
+
+def test_release_rule_sets_pre_2023_films_to_not_in_mmm():
+    from us_hment_mmm.reference.review import Plan, apply_release_rule
+    titles = {"tt1": {"imdb_id": "tt1", "release_date": "2019-12-06", "in_mmm": None},
+              "tt2": {"imdb_id": "tt2", "release_date": "2022-06-01", "in_mmm": True},
+              "tt3": {"imdb_id": "tt3", "release_date": "2023-01-01", "in_mmm": None},
+              "tt4": {"imdb_id": "tt4", "release_date": "2020-01-01", "in_mmm": False},
+              "tt5": {"imdb_id": "tt5", "release_date": None, "in_mmm": None}}
+    plan = Plan(titles, {}, {})
+    assert apply_release_rule(plan) == 2
+    changed = {(c["key"], c["field"]): c["new"] for c in plan.changes}
+    assert changed[("tt1", "in_mmm")] is False and changed[("tt2", "in_mmm")] is False
+    assert "Released before 2023" in changed[("tt1", "in_mmm_reason")]
+    assert all(c["where"] == "Automatic rule" for c in plan.changes)
+    assert not any(k[0] in ("tt3", "tt4", "tt5") for k in changed)
+    assert not plan.problems
+
+
+def test_auto_rule_rows_are_listed_separately():
+    from us_hment_mmm.reference.review import Plan, apply_release_rule, changes_table
+    plan = Plan({"tt1": {"imdb_id": "tt1", "title_name": "OLD FILM", "release_date": "2019-01-01",
+                         "in_mmm": None}}, {}, {})
+    apply_release_rule(plan)
+    assert plan.auto_films == [{"imdb_id": "tt1", "title": "OLD FILM", "released": "2019-01-01",
+                                "was": None}]
+    assert changes_table(plan.changes) is not None   # rule rows are left out of the main table

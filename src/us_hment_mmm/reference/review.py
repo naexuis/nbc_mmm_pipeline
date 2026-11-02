@@ -458,6 +458,7 @@ class Plan:
         self.reason = ""
         self.where = ""
         self.genre_source: str | None = None   # source label for the next imdb_genres change
+        self.auto_films: list[dict] = []        # films changed by the automatic release rule
         self._set_by: dict[tuple, object] = {}
 
     # -- low level -------------------------------------------------------------
@@ -650,6 +651,30 @@ class Plan:
             self.set_value(t["imdb_id"], t["field"], value)
         else:
             self.map_pid(t["product_id"], value, t["label"])
+
+
+RELEASE_RULE_WHERE = "Automatic rule"
+RELEASE_RULE_REASON = ("Released before {year}: Home Entertainment ran PVOD media from {year} "
+                       "(automatic rule)")
+
+
+def apply_release_rule(plan: Plan) -> int:
+    """Set In MMM = no for every film released before config.MMM_FIRST_RELEASE_DATE (the MMM
+    only uses titles from then on). Returns how many films it changes."""
+    first = config.MMM_FIRST_RELEASE_DATE
+    before = len(plan.changes)
+    films = 0
+    for imdb, row in sorted(plan.titles.items()):
+        released = parse_date(row.get("release_date"))
+        if released and released < first and row.get("in_mmm") is not False:
+            plan.auto_films.append({"imdb_id": imdb, "title": row.get("title_name"),
+                                    "released": released, "was": row.get("in_mmm")})
+            plan.where = RELEASE_RULE_WHERE
+            plan.reason = RELEASE_RULE_REASON.format(year=first[:4])
+            plan.set_value(imdb, "in_mmm", "no")
+            films += 1
+    plan.where = plan.reason = ""
+    return films if len(plan.changes) > before else 0
 
 
 def plan_from_workbook(data: dict, items: list[dict], titles: dict, aliases: dict,
@@ -1025,6 +1050,15 @@ def run(dry_run: bool = True, root: str | Path | None = None) -> dict:
               "waiting": [p.name for p in waiting[1:]], "folders": {k: str(v) for k, v in
                                                                    folders.items()}}
     if not waiting:
+        plan = Plan(g["titles"], g["aliases"], g["enrichment"], g["chtt"])
+        result["auto_films"] = apply_release_rule(plan)
+        result["auto_list"] = plan.auto_films
+        result["changes"] = plan.changes
+        if plan.changes and not dry_run:
+            result["history_rows"] = _apply(client, plan)
+            result["auto_saved"] = True
+            g = gather(client)
+            result["counts"] = section_counts(g["items"])
         result["workbook"] = W.write_workbook(g["items"], g["titles"], folders["issued"],
                                               g["aliases"]).name
         result["status"] = "ISSUED"
@@ -1034,6 +1068,8 @@ def run(dry_run: bool = True, root: str | Path | None = None) -> dict:
     data, read_problems = W.read_workbook(path)
     plan = plan_from_workbook(data, g["items"], g["titles"], g["aliases"], g["enrichment"],
                               g["chtt"])
+    result["auto_films"] = apply_release_rule(plan)
+    result["auto_list"] = plan.auto_films
     result.update(changes=plan.changes, problems=read_problems + plan.problems,
                   skipped=plan.skipped)
     if result["problems"]:
@@ -1062,7 +1098,7 @@ def changes_table(changes: list[dict]):
              REVIEW_TABLE: "rejected suggestion"}
     rows = [{"where": c["where"], "what": names.get(c["table"], c["table"]), "key": c["key"],
              "field": c["field"], "old": c["old"], "new": c["new"], "reason": c["reason"]}
-            for c in changes]
+            for c in changes if c["where"] != RELEASE_RULE_WHERE]
     df = pd.DataFrame(rows, columns=["where", "what", "key", "field", "old", "new", "reason"])
     df = df.astype(object).where(df.notna(), "(empty)")
     return table_or_note(df, "No changes.",
@@ -1071,9 +1107,31 @@ def changes_table(changes: list[dict]):
                                  "reason": "Reason"})
 
 
-def where_to_find(folder: str) -> str:
+def auto_rule_table(result: dict):
+    """One row per film changed by the automatic release rule (shown under Step 3)."""
+    import pandas as pd
+    from IPython.display import Markdown
+
+    from us_hment_mmm.display import styled
+
+    films = result.get("auto_list") or []
+    if not films:
+        return Markdown("ℹ️ Automatic rule: no films to change.")
+    year = config.MMM_FIRST_RELEASE_DATE[:4]
+    saved = "were set" if result.get("auto_saved") or result.get("status") == "APPLIED" \
+        else "will be set"
+    df = pd.DataFrame([{"Film": f["title"], "IMDb ID": f["imdb_id"], "Released": f["released"],
+                        "In MMM before": {True: "yes", False: "no"}.get(f["was"], "(not set)")}
+                       for f in sorted(films, key=lambda f: (f["released"], f["title"] or ""))])
+    from IPython.display import display
+    display(Markdown(f"**Automatic rule:** these {len(films)} film(s) released before {year} "
+                     f"{saved} to In MMM = no."))
+    return styled(df)
+
+
+def where_to_find(folder: str, root: str | Path | None = None) -> str:
     """Plain directions to a review folder, both in the Domino web page and as a path."""
-    root = Path(config.REVIEW_DIR)
+    root = Path(root or config.REVIEW_DIR)
     parts = root.parts
     dataset = parts[4] if len(parts) > 4 and parts[1:4] == ("domino", "datasets", "local") \
         else root.name
@@ -1097,6 +1155,15 @@ def status_markdown(result: dict):
     upload = ("**Where to upload it:** " + where_to_find("returned")
               + "  \nUse the **Upload files** button on that page. If a copy with the same name "
               "is already there, replace it.")
+    auto = result.get("auto_films") or 0
+    year = config.MMM_FIRST_RELEASE_DATE[:4]
+    if auto and result.get("auto_saved"):
+        counts += (f"  \n✅ Saved the automatic rule: **{auto}** film(s) released before {year} "
+                   "are now In MMM = no (listed under Step 3).")
+    elif auto:
+        counts += (f"  \nℹ️ Automatic rule: **{auto}** film(s) released before {year} will be set "
+                   "to In MMM = no (listed under Step 3). They are saved the next time you run with "
+                   "`DRY_RUN = False`.")
     if status == "ISSUED" and not any(c.values()):
         head = "### ✅ Nothing needs a decision"
         body = ("Every section of the review list is empty, so there is nothing to decide.\n\n"

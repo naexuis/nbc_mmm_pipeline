@@ -74,6 +74,11 @@ CHANNEL_MMM_OVERRIDES = {
     "CABLE_WILLOW": "VIDEO_WILLOW",
 }
 CHANNEL_RADIO_MEDIA = ("SPOT RADIO", "NETWORK RADIO")
+# Channel review (Planning): workbooks in the Domino dataset, like the title review.
+CHANNEL_REVIEW_DIR = "/domino/datasets/local/nbcu_mmm_dev/us_hment_mmm/review/channels"
+CHANNEL_REVIEW_MAX_PLACEMENTS = 300              # placements per workbook, largest spend first
+CHANNEL_MODEL_RUNS_TABLE = "channel_model_runs"  # suggestion quality and review rounds
+MMM_FIRST_RELEASE_DATE = "2023-01-01"            # the MMM uses titles released on/after this
 
 # ---- Revenue source (exported by hand from NBC GCP) ------------------------
 REVENUE_BUCKET = "nbcu-marcus-hilliard"
