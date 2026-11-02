@@ -13,6 +13,8 @@ Rules (decision log, same as the old notebooks 103/104):
     days. A placement with no flight dates takes them from its first and last buy month.
     A buy month that falls outside the flight is spread over the whole month (flagged).
   - spend whose product code is not mapped yet is kept, with link = 'unmapped'.
+Spend dated after the snapshot is booked but not yet run: spend_status = 'scheduled'
+(otherwise 'actual'); the model uses 'actual' only.
 Channel labels are added in a later step.
 
 Run (from /mnt/UniversalPicturesMMM):
@@ -150,6 +152,8 @@ SELECT {media_snapshot_expr('prisma_placement_buys')} AS snapshot_date,
        ANY_VALUE(x.buy_type) AS buy_type, ANY_VALUE(x.package_type) AS package_type,
        spend_date, SUM(x.amount / (DATE_DIFF(x.seg_end, x.seg_start, DAY) + 1)) AS spend_usd,
        'prisma BuyAmountBillable' AS cost_basis,
+       IF(spend_date > {media_snapshot_expr('prisma_placement_buys')}, 'scheduled', 'actual')
+         AS spend_status,
        STRING_AGG(DISTINCT x.row_note, '; ') AS date_note,
        CURRENT_TIMESTAMP() AS built_at
 FROM clipped x CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(x.seg_start, x.seg_end)) AS spend_date
@@ -176,6 +180,11 @@ FROM clipped WHERE flight_note IS NOT NULL
 UNION ALL
 SELECT 'dates', 'buy month outside flight (spread over the month)', COUNT(*), SUM(amount)
 FROM clipped WHERE NOT inside
+UNION ALL
+SELECT 'scheduled', 'after the snapshot date (booked, not yet run)', COUNT(DISTINCT x.placement_number),
+       SUM(x.amount / (DATE_DIFF(x.seg_end, x.seg_start, DAY) + 1))
+FROM clipped x CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(x.seg_start, x.seg_end)) AS d
+WHERE d > {media_snapshot_expr('prisma_placement_buys')}
 UNION ALL
 SELECT 'snapshot', CAST({media_snapshot_expr('prisma_placement_buys')} AS STRING), COUNT(*), SUM(amount)
 FROM kept
@@ -222,6 +231,11 @@ def sections(rows) -> tuple[dict, float]:
     notes = [f"{_nice(r.item)}: {_money(r.spend)} ({r.n:,} buy rows). The spend "
              "is kept; these rows are marked in the column date_note."
              for r in by.get("dates", []) if r.n]
+    for r in by.get("scheduled", []):
+        if r.n:
+            notes.append(f"{_money(r.spend)} of the spend kept is dated after the snapshot "
+                         f"({r.n:,} placements): booked but not yet run. It is marked "
+                         "spend_status = 'scheduled' and the model uses only 'actual' spend.")
     facts = (f"Prisma snapshot **{snap.item if snap else '?'}** · advertisers "
              f"{', '.join(config.MEDIA_PRISMA_ADVERTISERS)} · approved campaign budgets only")
     return {"facts": facts, "tables": tables, "notes": notes}, kept_total

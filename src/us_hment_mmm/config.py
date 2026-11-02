@@ -53,6 +53,9 @@ MEDIA_PRISMA_CORE_TABLE = "media_prisma_daily"   # placement x day spend (Prisma
 MEDIA_PRISMA_ADVERTISERS = ("ZUE", "ZFF", "ZFE")
 MEDIA_TEST_CAMPAIGNS = ("CPZLLW", "CPKVZR")      # Ad Ops test campaigns: never spend
 MEDIA_APPROVED_STATUS = "APPROVED"               # only approved campaign budgets count
+MEDIA_TV_CORE_TABLE = "media_tv_daily"           # NetPak + SpotPak spend per network x day
+MEDIA_TV_CLIENTS = ("ZUE", "ZUV", "ZFF", "ZFE")
+MEDIA_SPOTPAK_NET_FACTOR = 0.85                  # SpotPak net cost = 0.85 x Gross_Cost
 
 # ---- Revenue source (exported by hand from NBC GCP) ------------------------
 REVENUE_BUCKET = "nbcu-marcus-hilliard"

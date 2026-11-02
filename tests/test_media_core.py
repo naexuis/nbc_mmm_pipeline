@@ -9,7 +9,7 @@ def test_sql_applies_the_agreed_rules():
     sql = b.table_sql()
     for text in ("'CPZLLW'", "'Fee'", "'Child'", "'APPROVED'", "IsDeleted) != 'False'",
                  "GENERATE_DATE_ARRAY(x.seg_start, x.seg_end)", "alias_type = 'media_product_code'",
-                 "INITCAP(TRIM(b.BuyMonth))", "'%d-%b-%Y'"):
+                 "INITCAP(TRIM(b.BuyMonth))", "'%d-%b-%Y'", "AS spend_status"):
         assert text in sql, text
 
 
