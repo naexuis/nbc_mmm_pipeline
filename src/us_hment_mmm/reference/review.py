@@ -189,6 +189,114 @@ def suggest_for_pid(name: str | None, imdb: str, titles: dict) -> tuple[bool, st
     return True, "NBC's revenue data tags these sales with this IMDb ID, and the names match"
 
 
+def suggest_for_untagged(p: dict, film: str) -> tuple[bool, str]:
+    """Proposal for a product ID found by name or date (its revenue rows have no IMDb ID)."""
+    if p.get("found_by") == "date":
+        return False, (f"NBC has no IMDb ID on these sales and the name does not match, but the "
+                       f"first sale ({p.get('first_sale')}) lines up with {film}'s release and "
+                       f"PVOD dates. If it is {film}, choose Use my answer and type "
+                       f"{p['imdb_id']}; if not, choose Keep as is")
+    if BUNDLE_RE.search(p.get("name") or ""):
+        return False, ("NBC has no IMDb ID on these sales; the revenue name looks like a bundle "
+                       f"or collection with {film}. Keep as is unless you are sure")
+    if not p.get("top"):
+        return False, (f"NBC has no IMDb ID on these sales; the name matches {film}, but another "
+                       "product ID for it has more sales. Check which one is the film")
+    return True, ("NBC has no IMDb ID on these sales; the revenue name matches this film and "
+                  "the sales start at its release")
+
+
+# Product IDs whose revenue rows carry no IMDb ID (NBC stopped tagging many new titles) are
+# matched to films two ways:
+#   by name  - the film's name is in the revenue name, and the first sale falls between two
+#              weeks before release and two weeks after PVOD (proposed for Accept)
+#   by date  - for films the name search missed: the first sale falls in that window and the
+#              product sold at least UNTAGGED_DATE_MIN_ROYALTY (listed, no proposal)
+# A smaller name match is listed only if it has at least UNTAGGED_MIN_SHARE of the best
+# match's royalty, or is a bundle (so the reviewer sees it).
+UNTAGGED_MIN_SHARE = 0.10
+UNTAGGED_DAYS_BEFORE_RELEASE = 14
+UNTAGGED_DAYS_AFTER_PVOD = 14
+UNTAGGED_DATE_MIN_ROYALTY = 10_000
+UNTAGGED_DATE_MAX_PER_FILM = 5
+
+
+def _match_name(s: str | None) -> str:
+    """norm_name, with apostrophes dropped first (FREDDY'S = FREDDYS)."""
+    return norm_name(re.sub(r"['’`]", "", s or ""))
+
+
+def _in_window(sold: date | None, release: date, pvod: date | None) -> bool:
+    if sold is None:
+        return True
+    if sold < release - timedelta(days=UNTAGGED_DAYS_BEFORE_RELEASE):
+        return False
+    return pvod is None or sold <= pvod + timedelta(days=UNTAGGED_DAYS_AFTER_PVOD)
+
+
+def match_untagged(products: list[dict], titles: dict,
+                   linked_films: set[str] = frozenset()) -> list[dict]:
+    """
+    Match untagged revenue product IDs to films released on or after
+    config.MMM_FIRST_RELEASE_DATE (see the notes above). Name matches: per film, the non-bundle
+    product with the most royalty is 'top' (proposed). Date matches only for films with no name
+    match and no product ID linked yet; never proposed.
+    """
+    first = config.MMM_FIRST_RELEASE_DATE
+    films = {}
+    for imdb, t in titles.items():
+        release, pvod = parse_date(t.get("release_date")), parse_date(t.get("pvod_date"))
+        if release and release >= first:
+            films[imdb] = (_match_name(t.get("title_name")), date.fromisoformat(release),
+                           date.fromisoformat(pvod) if pvod else None)
+    by_film: dict[str, list[dict]] = {}
+    unmatched = []
+    for p in products:
+        name = f" {_match_name(p.get('name'))} "
+        sold = parse_date(p.get("first_sale"))
+        sold = date.fromisoformat(sold) if sold else None
+        hits = [(imdb, key) for imdb, (key, release, pvod) in films.items()
+                if len(key.replace(" ", "")) >= 4 and f" {key} " in name
+                and _in_window(sold, release, pvod)]
+        longest = max((len(k) for _, k in hits), default=0)   # most specific film name wins
+        best = [imdb for imdb, k in hits if len(k) == longest]
+        if len(best) == 1:
+            by_film.setdefault(best[0], []).append(p)
+        elif not hits:
+            unmatched.append((p, sold))
+    out = []
+    for imdb, found in by_film.items():
+        found.sort(key=lambda p: -(p.get("royalty") or 0))
+        singles = [p for p in found if not BUNDLE_RE.search(p.get("name") or "")]
+        top = singles[0]["product_id"] if singles else None
+        top_royalty = (singles[0].get("royalty") or 0) if singles else 0
+        for p in found:
+            bundle = bool(BUNDLE_RE.search(p.get("name") or ""))
+            if p["product_id"] == top or bundle or (p.get("royalty") or 0) >= (
+                    UNTAGGED_MIN_SHARE * top_royalty):
+                out.append({**p, "imdb_id": imdb, "found_by": "name",
+                            "top": p["product_id"] == top})
+    # Date matches: each product goes to the film whose release or PVOD is closest to its
+    # first sale; each film keeps its closest few.
+    missed = {imdb: f for imdb, f in films.items()
+              if imdb not in by_film and imdb not in linked_films and f[2] is not None}
+    by_date: dict[str, list[tuple[int, dict]]] = {}
+    for p, sold in unmatched:
+        if sold is None or (p.get("royalty") or 0) < UNTAGGED_DATE_MIN_ROYALTY:
+            continue
+        near = [(min(abs((sold - release).days), abs((sold - pvod).days)), imdb)
+                for imdb, (_k, release, pvod) in missed.items()
+                if _in_window(sold, release, pvod)]
+        if near:
+            gap, imdb = min(near)
+            by_date.setdefault(imdb, []).append((gap, p))
+    for imdb, found in by_date.items():
+        for _gap, p in sorted(found, key=lambda x: (x[0], -(x[1].get("royalty") or 0)))[
+                :UNTAGGED_DATE_MAX_PER_FILM]:
+            out.append({**p, "imdb_id": imdb, "found_by": "date", "top": False})
+    return out
+
+
 def date_differences(titles: dict, enrichment: dict, chtt: dict) -> list[dict]:
     """Dates where NBC or Finance has a value that differs from the approved one."""
     out = []
@@ -346,6 +454,8 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
     in_mmm_text = {True: "yes", False: "no", None: "not reviewed"}
 
     def add(section, key, current, suggested, why, target, show):
+        if section == 4 and not suggested and (key, NO_SUGGESTION) in rejected:
+            return                       # kept unlinked before (e.g. a bundle)
         if suggested and (key, suggested) in rejected:
             if section != 1:
                 return
@@ -392,7 +502,10 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
              if d["field"] == "pvod_date" else ""})
     for p in sorted(pids, key=lambda p: -(p["royalty"] or 0)):
         name = titles[p["imdb_id"]]["title_name"]
-        propose, why = suggest_for_pid(p.get("name"), p["imdb_id"], titles)
+        if p.get("found_by") in ("name", "date"):
+            propose, why = suggest_for_untagged(p, name)
+        else:
+            propose, why = suggest_for_pid(p.get("name"), p["imdb_id"], titles)
         add(4, f"pid|{p['product_id']}", "not mapped",
             f"{name} ({p['imdb_id']})" if propose else None, why,
             {"product_id": p["product_id"], "imdb_id": p["imdb_id"] if propose else None,
@@ -400,7 +513,9 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
             {"label": f"Product ID {p['product_id']}", "product_id": p["product_id"],
              "revenue_name": p.get("name"), "royalty": round(p["royalty"] or 0),
              "sales": f"{p.get('first_sale') or '?'} to {p.get('last_sale') or '?'}",
-             "tagged": f"{name} ({p['imdb_id']})",
+             "tagged": {"name": f"(no IMDb ID) name matches {name}",
+                        "date": f"(no IMDb ID) first sale lines up with {name}"}.get(
+                            p.get("found_by"), f"{name} ({p['imdb_id']})"),
              "proposed": f"Link to {name} ({p['imdb_id']})" if propose else NO_PROPOSAL})
     for g in genres:
         add(5, f"genre|{g['imdb_id']}|{g['field']}", g["current"] or "(none)", g["new"],
@@ -624,8 +739,8 @@ class Plan:
         """Apply one Review-tab decision to its item."""
         t, section = item["target"], item["section"]
         if decision == "reject":
-            if item["has_suggestion"]:
-                self.reject(item)
+            if item["has_suggestion"] or section == 4:
+                self.reject(item)        # a product ID kept unlinked does not come back
             return
         if decision == "approve":
             if not item["has_suggestion"]:
@@ -942,6 +1057,32 @@ def _read_unmapped_pids(client, titles, aliases):
             and ("revenue_product_id", None, r["product_id"]) not in aliases]
 
 
+def _read_untagged_pids(client, titles, aliases):
+    """Unlinked product IDs whose rows have no IMDb ID, first sold since the MMM's first year."""
+    t = config.REVENUE_RAW_TABLE
+    exclude = ", ".join(f"'{x}'" for x in config.REVENUE_EXCLUDE_SOURCES) or "''"
+    day = "SAFE.PARSE_DATE('%Y-%m-%d', TRIM(transaction_date))"
+    sql = f"""
+        SELECT TRIM(CAST(product_id1 AS STRING)) AS product_id,
+               APPROX_TOP_COUNT(TRIM(reported_product_name), 1)[SAFE_OFFSET(0)].value AS name,
+               SUM(IF(TRIM(country_cd) = '{config.REVENUE_COUNTRY}'
+                      AND IFNULL(TRIM(data_source), '') NOT IN ({exclude}),
+                      SAFE_CAST(REPLACE(REPLACE(TRIM(royalty_total_usd), '$', ''), ',', '')
+                                AS FLOAT64), 0)) AS royalty,
+               CAST(MIN({day}) AS STRING) AS first_sale, CAST(MAX({day}) AS STRING) AS last_sale
+        FROM `{_raw(t)}`
+        WHERE {_latest(t)} AND NULLIF(TRIM(imdb_title_id), '') IS NULL
+        GROUP BY 1
+        HAVING MIN({day}) >= DATE_SUB(DATE '{config.MMM_FIRST_RELEASE_DATE}',
+                                      INTERVAL {UNTAGGED_DAYS_BEFORE_RELEASE} DAY)
+    """
+    rows = [r for r in _rows(client, sql) if r["product_id"]
+            and ("revenue_product_id", None, r["product_id"]) not in aliases]
+    linked = {a["imdb_id"] for (kind, _g, _v), a in aliases.items()
+              if kind == "revenue_product_id" and a.get("imdb_id")}
+    return match_untagged(rows, titles, linked)
+
+
 def gather(client=None) -> dict:
     """Read everything the review needs and build the list."""
     client = client or bq_client()
@@ -951,7 +1092,8 @@ def gather(client=None) -> dict:
     enrichment = _read_enrichment(client, titles, tags)
     chtt = _read_chtt(client, titles)
     dates = date_differences(titles, enrichment, chtt)
-    pids = _read_unmapped_pids(client, titles, aliases)
+    pids = _read_unmapped_pids(client, titles, aliases) + _read_untagged_pids(client, titles,
+                                                                               aliases)
     amazon, missing, amazon_note = _read_amazon(client, titles)
     items = build_items(codes, titles, enrichment, dates, pids, _read_rejections(client),
                         genres=genre_differences(titles, enrichment), amazon=amazon,

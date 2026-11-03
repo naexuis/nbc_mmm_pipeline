@@ -73,10 +73,11 @@ REVIEW_TABS = {
          ("Your answer (date)", "answer", 14), ("Reason", "reason", 40)],
         CHOICES),
     4: ("4 · Revenue product IDs",
-        "NBC's revenue data tags these product IDs with a film, but they are not linked yet, so "
-        "their revenue is not counted for the film. Check that the name in revenue is that film "
+        "These product IDs are not linked to a film yet, so their revenue is not counted for the "
+        "film. Either NBC's revenue data tags them with the film, or (when NBC left the IMDb ID "
+        "blank) the revenue name matches a film released since 2023. Check that the name in revenue is that film "
         "(not a bundle or a different film), then choose Accept to link them. Use my answer lets "
-        "you type a different IMDb ID. Keep as is leaves them unlinked.",
+        "you type a different IMDb ID. Keep as is leaves them unlinked and they do not come back (use it for bundles and collections).",
         [("Product ID", "product_id", 12), ("Name in revenue", "revenue_name", 34),
          ("Royalty (USD)", "royalty", 14), ("Sales", "sales", 24),
          ("NBC tags it as", "tagged", 34), ("Proposed fix", "proposed", 40), ("Why", "why", 46),

@@ -660,3 +660,80 @@ def test_auto_rule_rows_are_listed_separately():
     assert plan.auto_films == [{"imdb_id": "tt1", "title": "OLD FILM", "released": "2019-01-01",
                                 "was": None}]
     assert changes_table(plan.changes) is not None   # rule rows are left out of the main table
+
+
+# --- Revenue product IDs with no IMDb ID on the rows (matched by name) ---------------------
+
+NEW_TITLES = {
+    "tt32547691": {"imdb_id": "tt32547691", "title_name": "PRESSURE", "release_date": "2026-05-29",
+                   "pvod_date": "2026-06-16"},
+    "tt36352591": {"imdb_id": "tt36352591", "title_name": "YOU ME AND TUSCANY",
+                   "release_date": "2026-04-10"},
+    "tt28650488": {"imdb_id": "tt28650488", "title_name": "THE SUPER MARIO GALAXY",
+                   "release_date": "2026-04-01"},
+    "tt0000001": {"imdb_id": "tt0000001", "title_name": "OLD FILM", "release_date": "2019-01-01"},
+    "tt30274401": {"imdb_id": "tt30274401", "title_name": "FIVE NIGHTS AT FREDDYS 2",
+                   "release_date": "2025-12-05"},
+}
+
+
+def _p(pid, name, royalty, first):
+    return {"product_id": pid, "name": name, "royalty": royalty, "first_sale": first,
+            "last_sale": "2026-10-28"}
+
+
+def test_untagged_matches_by_name_and_proposes_the_main_product():
+    found = R.match_untagged([
+        _p("1204450", "Pressure", 2_756_116, "2026-06-10"),
+        _p("1202833", "Pier Pressure", 228, "2026-10-19"),           # far smaller: left out
+        _p("1188364", "Under Pressure", 6_372, "2024-05-15"),        # sold before release
+        _p("9", "You, Me & Tuscany", 50_000, "2026-05-11"),          # & = AND
+        _p("1199377", "The Super Mario Galaxy Movie", 13_845_093, "2026-03-31"),
+        _p("1205728", "The Super Mario Bros. Movie & The Super Mario Galaxy Movie 2-Movie "
+                      "Collection", 726_080, "2026-03-31"),
+        _p("5", "Old Film", 99, "2026-01-01"),                       # released before 2023
+        _p("1194168", "Five Nights at Freddy's 2", 4_702_621, "2025-12-04"),
+    ], NEW_TITLES)
+    got = {p["product_id"]: (p["imdb_id"], p["top"]) for p in found}
+    assert got == {"1204450": ("tt32547691", True), "9": ("tt36352591", True),
+                   "1199377": ("tt28650488", True), "1205728": ("tt28650488", False),
+                   "1194168": ("tt30274401", True)}
+
+
+def test_untagged_items_in_the_workbook():
+    found = R.match_untagged([
+        _p("1199377", "The Super Mario Galaxy Movie", 13_845_093, "2026-03-31"),
+        _p("1205728", "The Super Mario Bros. Movie & The Super Mario Galaxy Movie 2-Movie "
+                      "Collection", 726_080, "2026-03-31")], NEW_TITLES)
+    items = {i["key"]: i for i in R.build_items([], NEW_TITLES, {}, [], found)}
+    main, bundle = items["pid|1199377"], items["pid|1205728"]
+    assert main["has_suggestion"] and main["target"]["imdb_id"] == "tt28650488"
+    assert "no IMDb ID" in main["show"]["tagged"]
+    assert not bundle["has_suggestion"] and "bundle" in bundle["why"]
+
+
+def test_untagged_date_window_and_date_only_matches():
+    titles = {**NEW_TITLES,
+              "tt32890033": {"imdb_id": "tt32890033", "title_name": "MINIONS 3",
+                             "release_date": "2026-07-01", "pvod_date": "2026-08-11"},
+              "tt9": {"imdb_id": "tt9", "title_name": "LINKED FILM",
+                      "release_date": "2026-07-03", "pvod_date": "2026-08-12"}}
+    found = R.match_untagged([
+        _p("1202833", "Pier Pressure", 500_000, "2026-10-19"),         # after PVOD + 2 weeks
+        _p("777", "Minions & Monsters", 5_000_000, "2026-06-30"),      # no name match, date fits
+        _p("778", "Tiny Thing", 900, "2026-06-30"),                    # too small for a date match
+    ], titles, linked_films={"tt9"})
+    got = {p["product_id"]: (p["imdb_id"], p["found_by"], p["top"]) for p in found}
+    assert got == {"777": ("tt32890033", "date", False)}
+    item = R.build_items([], titles, {}, [], found)[0]
+    assert not item["has_suggestion"] and "Use my answer" in item["why"]
+    assert "first sale lines up with MINIONS 3" in item["show"]["tagged"]
+
+
+def test_kept_bundle_does_not_come_back():
+    found = R.match_untagged([
+        _p("1205728", "The Super Mario Bros. Movie & The Super Mario Galaxy Movie 2-Movie "
+                      "Collection", 726_080, "2026-03-31")], NEW_TITLES)
+    assert len(R.build_items([], NEW_TITLES, {}, [], found)) == 1
+    again = R.build_items([], NEW_TITLES, {}, [], found, {("pid|1205728", R.NO_SUGGESTION)})
+    assert again == []
