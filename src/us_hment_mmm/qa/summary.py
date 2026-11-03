@@ -391,23 +391,53 @@ def chart_retailers(data: dict):
 # Per-title table
 # =============================================================================
 
-def film_table(data: dict):
-    from us_hment_mmm.display import styled
+MONEY_COLUMNS = ["Prisma spend", "TV / audio / MVPD spend", "Media spend", "No channel yet",
+                 "Premium revenue", "Revenue after EST"]
 
+
+def film_frame(data: dict) -> pd.DataFrame:
+    """One row per title (the Step 8 table), plain values, sorted by release date."""
     f = data["films"].copy()
     f["media"] = f[["prisma", "tv"]].fillna(0).sum(axis=1)
     f["in_mmm"] = f["in_mmm"].map({True: "yes", False: "no"}).fillna("not reviewed")
     f["clients"] = f["clients"].fillna("")                 # client codes, e.g. "ZFF, ZUE"
     f["per_dollar"] = f.apply(lambda r: r["premium"] / r["media"]
                               if r["media"] and pd.notna(r["premium"]) else None, axis=1)
-    cols = {"title_name": "Title", "release_date": "Release", "distributor": "Distributor",
-            "clients": "Client", "in_mmm": "In MMM", "pvod_date": "PVOD", "est_date": "EST",
-            "prisma": "Prisma spend", "tv": "TV / audio / MVPD spend", "media": "Media spend",
+    cols = {"title_name": "Title", "imdb_id": "IMDb ID", "release_date": "Release",
+            "distributor": "Distributor", "clients": "Client", "in_mmm": "In MMM",
+            "pvod_date": "PVOD", "est_date": "EST", "prisma": "Prisma spend",
+            "tv": "TV / audio / MVPD spend", "media": "Media spend",
             "no_channel": "No channel yet", "premium": "Premium revenue",
             "per_dollar": "Premium revenue per $1 media", "after_est": "Revenue after EST"}
     out = f.sort_values(["release_date", "title_name"])[list(cols)].rename(columns=cols)
     for c in ("Release", "PVOD", "EST"):
         out[c] = pd.to_datetime(out[c], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
-    money = ["Prisma spend", "TV / audio / MVPD spend", "Media spend", "No channel yet",
-             "Premium revenue", "Revenue after EST"]
-    return styled(out, money=money, decimals={"Premium revenue per $1 media": 2})
+    return out.reset_index(drop=True)
+
+
+def film_table(data: dict):
+    from us_hment_mmm.display import styled
+
+    out = film_frame(data).drop(columns=["IMDb ID"])
+    return styled(out, money=MONEY_COLUMNS, decimals={"Premium revenue per $1 media": 2})
+
+
+def save_film_csv(data: dict, folder: str | None = None):
+    """Save the Step 8 table as a dated CSV in the QA export folder and say where it is."""
+    from datetime import datetime
+    from pathlib import Path
+
+    from IPython.display import Markdown
+
+    from us_hment_mmm.reference.review import where_to_find
+
+    root = Path(folder or config.QA_EXPORT_DIR)
+    root.mkdir(parents=True, exist_ok=True)
+    out = film_frame(data)
+    out[MONEY_COLUMNS] = out[MONEY_COLUMNS].round(2)
+    out["Premium revenue per $1 media"] = out["Premium revenue per $1 media"].round(4)
+    name = f"qa-titles-{datetime.now().strftime('%Y%m%dT%H%M%S')}.csv"
+    out.to_csv(root / name, index=False)
+    return Markdown(f"✅ Saved **{len(out):,}** titles to `{name}`.\n\n**Where to find it:** "
+                    + where_to_find(root.name, root.parent)
+                    + "  \nClick the file name to download it. It opens in Excel.")

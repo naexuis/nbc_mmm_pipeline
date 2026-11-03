@@ -170,6 +170,9 @@ TITLE_HISTORY_TABLE = "title_history"  # every change: who, when, why, old -> ne
 #   imported/  workbooks already saved to BigQuery
 REVIEW_DIR = "/domino/datasets/local/nbcu_mmm_dev/us_hment_mmm/review/titles"
 
+# Domino dataset folder for CSV exports from 08_QA_Summary (one dated file per save)
+QA_EXPORT_DIR = "/domino/datasets/local/nbcu_mmm_dev/us_hment_mmm/qa"
+
 # ---- Distributor standard names (agreed with Marcus 2026-11-01) --------------------
 # Any spelling on the left (old dictionary or NBC enrichment) is stored as the name on the
 # right. Matching ignores case, punctuation and extra spaces. Unlisted names are kept as is.

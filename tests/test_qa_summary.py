@@ -125,3 +125,12 @@ def test_monthly_is_interactive_and_starts_in_2023():
     fig = Q.chart_monthly(Q.load(FakeClient()))
     assert [len(t.x) for t in fig.data] == [1, 1]            # December 2022 left out
     assert fig.layout.hovermode == "x unified"
+
+
+def test_save_film_csv(tmp_path):
+    msg = Q.save_film_csv(Q.load(FakeClient()), folder=tmp_path / "qa")
+    files = list((tmp_path / "qa").glob("qa-titles-*.csv"))
+    assert len(files) == 1 and files[0].name in msg.data
+    saved = pd.read_csv(files[0])
+    assert list(saved["Title"]) == ["FILM A", "FILM B"]
+    assert saved.loc[0, "IMDb ID"] == "tt1" and saved.loc[0, "Media spend"] == 1_500_000
