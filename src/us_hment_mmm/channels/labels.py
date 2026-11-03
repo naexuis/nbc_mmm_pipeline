@@ -49,12 +49,14 @@ LABEL_SCHEMA = [
     bigquery.SchemaField("detail", "STRING"),          # placement name, or media name
     bigquery.SchemaField("mediaplan_label", "STRING"),
     bigquery.SchemaField("mmm_label", "STRING"),
+    bigquery.SchemaField("decided_spend", "FLOAT64"),  # spend when the label was decided
     bigquery.SchemaField("source", "STRING"),          # where the label came from
     bigquery.SchemaField("reason", "STRING"),
     bigquery.SchemaField("updated_at", "TIMESTAMP"),
     bigquery.SchemaField("updated_by", "STRING"),
 ]
 LABEL_FIELDS = ("mediaplan_label", "mmm_label")
+HISTORY_FIELDS = (*LABEL_FIELDS, "decided_spend")
 PARENT_RE = re.compile(r"^(" + "|".join(sorted(config.CHANNEL_PARENTS, key=len, reverse=True))
                        + r")(?:_|$)")
 
@@ -166,8 +168,9 @@ def _core(name: str) -> str:
 
 def _parent_sql(col: str) -> str:
     alts = "|".join(sorted(config.CHANNEL_PARENTS, key=len, reverse=True))
-    return (f"COALESCE(REGEXP_EXTRACT({col}, r'^({alts})(?:_|$)'), "
-            f"'{config.CHANNEL_NEEDS_LABEL}')")
+    return (f"IF({col} = '{config.CHANNEL_REMOVED}', '{config.CHANNEL_REMOVED}', "
+            f"COALESCE(REGEXP_EXTRACT({col}, r'^({alts})(?:_|$)'), "
+            f"'{config.CHANNEL_NEEDS_LABEL}'))")
 
 
 def view_sql() -> str:
@@ -303,7 +306,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Seed channel labels and build the media_daily view.")
     ap.add_argument("--write", action="store_true", help="Create the label table and view")
     ap.add_argument("--view", action="store_true", help="Only refresh the media_daily view")
+    ap.add_argument("--baseline", action="store_true",
+                    help="Record today's spend on labels that have none yet (run once; then use "
+                         "--baseline --write to save)")
     args = ap.parse_args()
+    if args.baseline:
+        from us_hment_mmm.channels.review import baseline
+
+        baseline(dry_run=not args.write)
+        return
     if args.view:
         bq_client().query(view_sql()).result()
         print(f"Refreshed view {config.DATASET_CORE}.{config.MEDIA_DAILY_VIEW}.")

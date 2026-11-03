@@ -65,6 +65,8 @@ CHANNEL_PARENTS = ("DISPLAY_VIDEO", "CTVOTT", "STREAMING", "PROGRAMMATIC", "SOCI
                    "AUDIO", "OOH", "PRINT", "MVPD", "CABLE", "NETWORK", "SPOTTV", "LINEAR",
                    "VIDEO", "FEE")
 CHANNEL_NEEDS_LABEL = "NEEDS A CHANNEL"
+# Label stored for a placement or code removed in the channel review (not media we model).
+CHANNEL_REMOVED = "REMOVED"
 # Network dictionary label -> MMM label where they differ (old ZUE notebook overrides).
 CHANNEL_MMM_OVERRIDES = {
     "AUDIO_IHEART": "AUDIO_IHEART_RADIO",
@@ -76,7 +78,7 @@ CHANNEL_MMM_OVERRIDES = {
 CHANNEL_RADIO_MEDIA = ("SPOT RADIO", "NETWORK RADIO")
 # Channel review (Planning): workbooks in the Domino dataset, like the title review.
 CHANNEL_REVIEW_DIR = "/domino/datasets/local/nbcu_mmm_dev/us_hment_mmm/review/channels"
-CHANNEL_REVIEW_MAX_PLACEMENTS = 300              # placements per workbook, largest spend first
+CHANNEL_REVIEW_MAX_PLACEMENTS = None             # placements per workbook (None = all of them)
 CHANNEL_MODEL_RUNS_TABLE = "channel_model_runs"  # suggestion quality and review rounds
 MMM_FIRST_RELEASE_DATE = "2023-01-01"            # the MMM uses titles released on/after this
 

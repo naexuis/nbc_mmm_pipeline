@@ -3,16 +3,19 @@ Channel-label suggestions for Prisma placements, learned from the placements alr
 
 A small text model reads the site and the placement name (no large language model). It is
 retrained from scratch every time the channel review runs, so every confirmed label is used.
-Each suggestion is put in one of two groups:
-  likely   the suggested MMM label has already been used on that site
-  closer   anything else (a new site, or a site used for another channel before)
+Each suggestion gets a "How sure" group:
+  likely     the site has always had one label, it is the suggested one, and the client
+             already has confirmed labels
+  closer     the site has been labelled more than one way (e.g. YouTube: CTV, programmatic or
+             streaming), or the client has no confirmed labels yet
+  new_site   the model has never seen this site
 Suggestions are never used until a person confirms them.
 """
 
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 
@@ -25,8 +28,17 @@ def clean_name(s) -> str:
     return s.replace("_", " ").replace("-", " ")
 
 
+SITE_NOISE = re.compile(r"\b(INC|LLC|LTD|CORP|CO|COMPANY|THE)\b")
+
+
 def site_key(s) -> str:
-    return re.sub(r"[^0-9A-Z]+", " ", str(s or "").upper()).strip()
+    """Site name compared loosely: "Peacock.com" = "PEACOCK", "TIKTOK INC" = "TIKTOK",
+    "SNAP INC FK SNAPCHAT" = "SNAPCHAT" (the name after FK / FKA, formerly known as)."""
+    s = str(s or "").upper()
+    s = re.split(r"\bFKA?\b", s)[-1]
+    s = re.sub(r"\.(COM|NET|ORG|TV|CO)\b", " ", s)
+    s = re.sub(r"[^0-9A-Z]+", " ", s)
+    return re.sub(r"\s+", " ", SITE_NOISE.sub(" ", s)).strip()
 
 
 def text_of(site, name) -> str:
@@ -50,33 +62,44 @@ def _fit(texts, labels):
 
 
 def train(rows: list[dict]) -> dict | None:
-    """rows: {site, name, mediaplan_label, mmm_label}. Returns the model, or None if too few."""
+    """rows: {site, name, mediaplan_label, mmm_label, client}. Returns the model, or None."""
     rows = [r for r in rows if r.get("mmm_label")]
     if len(rows) < MIN_TRAINING_ROWS:
         return None
     texts = [text_of(r["site"], r["name"]) for r in rows]
-    seen = defaultdict(set)
+    seen = defaultdict(Counter)
     for r in rows:
-        seen[site_key(r["site"])].add(r["mmm_label"])
+        seen[site_key(r["site"])][r["mmm_label"]] += 1
     return {"mmm": _fit(texts, [r["mmm_label"] for r in rows]),
             "plan": _fit(texts, [r.get("mediaplan_label") or r["mmm_label"] for r in rows]),
-            "seen": seen, "size": len(rows)}
+            "seen": seen, "clients": {r["client"] for r in rows if r.get("client")},
+            "size": len(rows)}
+
+
+def group_for(seen: dict, clients: set, site, client, mmm) -> str:
+    labels = seen.get(site_key(site))
+    if not labels:
+        return "new_site"
+    if len(labels) > 1 or (clients and client and client not in clients):
+        return "closer"
+    return "likely" if mmm in labels else "closer"
 
 
 def suggest(model: dict | None, items: list[dict]) -> list[dict]:
-    """Adds suggested_mmm, suggested_plan and group ('likely' / 'closer') to each item."""
+    """Adds suggested_mmm, suggested_plan and group (likely / closer / new_site) to each item."""
     if not items:
         return items
     if model is None or model["mmm"] is None:
         for it in items:
-            it.update(suggested_mmm=None, suggested_plan=None, group="closer")
+            it.update(suggested_mmm=None, suggested_plan=None, group="new_site")
         return items
     texts = [text_of(it.get("site"), it.get("name")) for it in items]
     mmm = model["mmm"].predict(texts)
     plan = model["plan"].predict(texts) if model["plan"] is not None else mmm
     for it, m, p in zip(items, mmm, plan):
-        likely = m in model["seen"].get(site_key(it.get("site")), set())
-        it.update(suggested_mmm=str(m), suggested_plan=str(p), group="likely" if likely else "closer")
+        it.update(suggested_mmm=str(m), suggested_plan=str(p),
+                  group=group_for(model["seen"], model["clients"], it.get("site"),
+                                  it.get("client"), str(m)))
     return items
 
 
@@ -96,21 +119,22 @@ def evaluate(rows: list[dict], parent_of) -> dict | None:
     y = np.array([r["mmm_label"] for r in rows])
     sites = [site_key(r["site"]) for r in rows]
     pred = np.empty(len(y), dtype=object)
-    likely = np.zeros(len(y), dtype=bool)
+    group = np.empty(len(y), dtype=object)
     for tr, te in GroupKFold(min(5, n_groups)).split(texts, y, groups):
         model = _fit(texts[tr], y[tr])
-        if model is None:
-            pred[te] = y[tr][0]
-        else:
-            pred[te] = model.predict(texts[te])
-        seen = defaultdict(set)
+        pred[te] = model.predict(texts[te]) if model is not None else y[tr][0]
+        seen = defaultdict(Counter)
         for i in tr:
-            seen[sites[i]].add(y[i])
+            seen[sites[i]][y[i]] += 1
         for i in te:
-            likely[i] = pred[i] in seen[sites[i]]
+            group[i] = group_for(seen, set(), sites[i], None, pred[i])
     ok = pred == y
     par = np.array([parent_of(p) == parent_of(t) for p, t in zip(pred, y)])
+
+    def acc(g):
+        m = group == g
+        return float(ok[m].mean()) if m.any() else None
+
     return {"training_rows": len(rows), "exact": float(ok.mean()), "parent": float(par.mean()),
-            "likely_share": float(likely.mean()),
-            "likely_acc": float(ok[likely].mean()) if likely.any() else None,
-            "closer_acc": float(ok[~likely].mean()) if (~likely).any() else None}
+            "likely_share": float((group == "likely").mean()), "likely_acc": acc("likely"),
+            "closer_acc": acc("closer"), "new_acc": acc("new_site")}
