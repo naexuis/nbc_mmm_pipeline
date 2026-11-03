@@ -313,3 +313,11 @@ def test_credits_take_the_film_and_site_label():
     assert placements[2]["suggested_mmm"] == "CTVOTT_YOUTUBE"
     assert placements[2]["suggested_plan"] == "VIDEO_YOUTUBE"
     assert placements[0]["group"] == "closer"
+
+
+def test_removals_do_not_count_as_disagreeing():
+    r = {"runs": [{"event": "saved", "accepted": 0, "changed": 1619, "removed": None},
+                  {"event": "issued", "exact": 0.9, "parent": 0.95, "training_rows": 100,
+                   "likely_acc": 0.99, "closer_acc": 0.9, "new_acc": 0.3, "workbook": "a"}],
+         "quality": None, "workbook": "a"}
+    assert "Last round" not in CR.quality_markdown(r).data

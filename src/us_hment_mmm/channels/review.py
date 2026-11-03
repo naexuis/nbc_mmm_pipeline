@@ -110,6 +110,7 @@ MODEL_RUNS_SCHEMA = [
     bigquery.SchemaField("listed_tv", "INT64"),
     bigquery.SchemaField("accepted", "INT64"),
     bigquery.SchemaField("changed", "INT64"),
+    bigquery.SchemaField("removed", "INT64"),
 ]
 
 
@@ -562,7 +563,12 @@ def write_workbook(items: list[dict], pairs: dict, folder: Path, after: dict | N
 
 
 def read_workbook(path: Path) -> tuple[list[dict], list[str]]:
-    wb = load_workbook(path, read_only=True, data_only=True)
+    import warnings
+
+    with warnings.catch_warnings():
+        # Excel for Mac saves drop-downs in a newer format the reader skips; harmless
+        warnings.simplefilter("ignore", UserWarning)
+        wb = load_workbook(path, read_only=True, data_only=True)
     rows, problems = [], []
     for group, (tab, _banner, cols) in TABS.items():
         if tab not in wb.sheetnames:
@@ -833,9 +839,14 @@ def run(dry_run: bool = True, root: str | Path | None = None, client=None) -> di
         _apply(client, data["all_labels"], changes, path.name)
     _log_run(client, {"event": "saved", "run_at": datetime.now(timezone.utc), "workbook": path.name,
                       "accepted": sum(c["decision"] == "accept" for c in changes),
-                      "changed": sum(c["decision"] != "accept" for c in changes)})
+                      "changed": sum(c["decision"] == "use my answer" for c in changes),
+                      "removed": sum(c["decision"] == "remove placement" for c in changes)})
     moved = R.move_to_imported(path, folders["imported"])
-    result.update(status="APPLIED" if changes else "IMPORTED_NOTHING", moved=moved.name)
+    result.update(status="APPLIED" if changes else "IMPORTED_NOTHING", moved=moved.name,
+                  remaining_placements=result["remaining_placements"]
+                  - sum(c["key_type"] == "prisma_placement" for c in changes),
+                  remaining_tv=result["remaining_tv"]
+                  - sum(c["key_type"] == "tv_network" for c in changes))
     return result
 
 
@@ -932,7 +943,9 @@ def quality_markdown(result: dict):
     from IPython.display import Markdown
 
     issued = [r for r in result["runs"] if r["event"] == "issued" and r.get("exact") is not None]
-    saved = [r for r in result["runs"] if r["event"] == "saved"]
+    # only rounds that counted removals separately (accepted vs changed means labels only)
+    saved = [r for r in result["runs"] if r["event"] == "saved" and r.get("removed") is not None
+             and (r.get("accepted") or 0) + (r.get("changed") or 0)]
     q = result.get("quality") or (issued[0] if issued else None)
     if not q or q.get("exact") is None:
         return Markdown("ℹ️ Not enough confirmed labels yet to test the suggestions.")
