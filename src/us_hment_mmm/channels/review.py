@@ -49,7 +49,8 @@ LABEL_HELP = ("Your media-plan label and Your MMM label have a drop-down of the 
               "CTVOTT_AMAZON_FIRETV or SOCIAL_TIKTOK, and the parent (first part) must be one of: "
               + ", ".join(config.CHANNEL_PARENTS) + ".")
 HOW_SURE = {"likely": "Likely right", "closer": "Closer look", "new_site": "New site",
-            "spend_changed": "Spend changed", "removed_changed": "Removed, spend changed"}
+            "spend_changed": "Spend changed", "removed_changed": "Removed, spend changed",
+            "credit": "Credit"}
 CHANGED = ("spend_changed", "removed_changed")
 SPEND_CHANGE = 1.0      # a decided placement or code comes back when its spend moves more than this
 PLACEMENT_COLS = [
@@ -118,6 +119,38 @@ MODEL_RUNS_SCHEMA = [
 
 def compact(s) -> str:
     return re.sub(r"[^0-9A-Z]+", "", str(s or "").upper())
+
+
+def suggest_credits(placements: list[dict], training: list[dict]) -> None:
+    """
+    A credit (Prisma CreditPlacement) offsets spend, so it should get the channel of the same
+    film's other placements on the same site: confirmed labels first, otherwise the suggestions
+    for that film's other placements on this workbook.
+    """
+    from collections import Counter
+
+    confirmed: dict[tuple, Counter] = {}
+    for t in training:
+        confirmed.setdefault((t.get("film"), S.site_key(t.get("site"))), Counter())[
+            (t["mmm_label"], t.get("mediaplan_label") or t["mmm_label"])] += 1
+    suggested: dict[tuple, Counter] = {}
+    for it in placements:
+        if it.get("package_type") != "CreditPlacement" and it.get("suggested_mmm"):
+            suggested.setdefault((it.get("imdb_id"), S.site_key(it.get("site"))), Counter())[
+                (it["suggested_mmm"], it.get("suggested_plan") or it["suggested_mmm"])] += 1
+    for it in placements:
+        if it.get("package_type") != "CreditPlacement" or it.get("group") in CHANGED:
+            continue
+        key = (it.get("imdb_id"), S.site_key(it.get("site")))
+        pool = confirmed.get(key) or suggested.get(key)
+        it["group"] = "credit"
+        if not pool:
+            it["credit_note"] = "no other placements of this film on this site"
+            continue
+        (mmm, plan), _n = pool.most_common(1)[0]
+        it.update(suggested_mmm=mmm, suggested_plan=plan)
+        if len(pool) > 1:
+            it["credit_note"] = "this film's placements on this site have more than one label"
 
 
 def tv_suggestion(code: str, network: str | None, media: str) -> str | None:
@@ -244,6 +277,7 @@ def _summary_sheet(wb, items: list[dict], after: dict):
         f = films.setdefault(i.get("film") or "(no film)", {"client": set(), "n": 0, "likely": 0,
                                                             "closer": 0, "new_site": 0,
                                                             "removed_changed": 0, "spend_changed": 0,
+                                                            "credit": 0,
                                                             "spend": 0.0,
                                                             "release": i.get("release_date")})
         f["client"].add(i.get("client") or "")
@@ -260,7 +294,7 @@ def _summary_sheet(wb, items: list[dict], after: dict):
                 "review' (and the same columns per film) update by themselves as rows are filled in "
                 "on 1 · Placements. Reference only: changes made here are not read.")
     ws["A2"].alignment = Alignment(wrap_text=True)
-    ws.merge_cells("A2:L2")
+    ws.merge_cells("A2:M2")
     ws.row_dimensions[2].height = 30
     top = [("Films on this workbook", len(films)),
            ("Placements on 1 · Placements", len(placements)),
@@ -277,14 +311,14 @@ def _summary_sheet(wb, items: list[dict], after: dict):
     for r, (label, value) in enumerate(top, start=4):
         ws.cell(row=r, column=1, value=label).font = bold
         if label == "Placements decided":
-            value = f"=SUM(I{first_film_row}:I{last_film_row})"
+            value = f"=SUM(J{first_film_row}:J{last_film_row})"
         elif label == "Placements still to review":
             value = "=B5-B6"
         elif label == "Films with placements still to review":
-            value = f'=COUNTIF(J{first_film_row}:J{last_film_row},">0")'
+            value = f'=COUNTIF(K{first_film_row}:K{last_film_row},">0")'
         ws.cell(row=r, column=2, value=value)
     header = ["Film", "Release date", "Client", "Placements", "Likely right", "Closer look",
-              "New site", "Spend changed", "Decided", "Still to review", "Spend",
+              "New site", "Credit", "Spend changed", "Decided", "Still to review", "Spend",
               "TV / radio codes"]
     hr = first_film_row - 1
     ws.cell(row=hr - 1, column=1, value="By film (largest spend first)").font = bold
@@ -298,14 +332,15 @@ def _summary_sheet(wb, items: list[dict], after: dict):
         release = f["release"].isoformat()[:10] if hasattr(f["release"], "isoformat") \
             else (f["release"] or "")
         values = [film, release, ", ".join(sorted(f["client"])), f["n"], f["likely"],
-                  f["closer"], f["new_site"], f["spend_changed"] + f["removed_changed"],
-                  "=" + decided.format(r=r), f"=D{r}-I{r}",
+                  f["closer"], f["new_site"], f["credit"], f["spend_changed"] + f["removed_changed"],
+                  "=" + decided.format(r=r), f"=D{r}-J{r}",
                   f["spend"], len(tv_codes.get(film, ()))]
         for j, v in enumerate(values, start=1):
             c = ws.cell(row=r, column=j, value=v)
-            if j == 11:
+            if j == 12:
                 c.number_format = "$#,##0"
-    for letter_, width in zip("ABCDEFGHIJKL", (44, 13, 10, 12, 12, 12, 10, 13, 10, 15, 14, 16)):
+    for letter_, width in zip("ABCDEFGHIJKLM",
+                              (44, 13, 10, 12, 12, 12, 10, 9, 13, 10, 15, 14, 16)):
         ws.column_dimensions[letter_].width = width
     ws.freeze_panes = ws.cell(row=first_film_row, column=1)
     ws.page_setup.orientation = "landscape"
@@ -378,6 +413,10 @@ def _instructions_sheet(wb):
                         "CTV, programmatic or streaming), or this client has no confirmed labels "
                         "yet. Please check how it actually ran."),
         ("New site", "We have never seen this site. The suggestion is only a starting point."),
+        ("Credit", "A credit (negative amount) gives back money on spend that already ran, so it "
+                   "should have the same channel as that spend. The suggestion is the label of the "
+                   "same film's other placements on the same site. If it says \"check\", that film "
+                   "has more than one label on this site, or no other placements there."),
         ("Spend changed (was $X)", "This placement already had a label, but its spend has "
                                    "changed since it was decided. The suggestion is its current "
                                    "label: Accept keeps it, or Use my answer to change it. Until "
@@ -460,6 +499,8 @@ def write_workbook(items: list[dict], pairs: dict, folder: Path, after: dict | N
                     v = HOW_SURE.get(it["group"], "")
                     if it["group"] in CHANGED:
                         v = f"{v} (was ${float(it.get('was_spend') or 0):,.0f})"
+                    elif it["group"] == "credit" and it.get("credit_note"):
+                        v = f"{v} (check: {it['credit_note']})"
                 elif field == "network" and it.get("was_decided"):
                     what = ("removed before" if it.get("current_mmm") == config.CHANNEL_REMOVED
                             else f"was {it.get('current_mmm')}")
@@ -743,6 +784,7 @@ def run(dry_run: bool = True, root: str | Path | None = None, client=None) -> di
                 else:
                     it.update(group="spend_changed", suggested_mmm=it["current_mmm"],
                               suggested_plan=it.get("current_plan") or it["current_mmm"])
+        suggest_credits(data["placements"], data["training"])
         cap = config.CHANNEL_REVIEW_MAX_PLACEMENTS
         listed = data["placements"] if cap is None else data["placements"][:cap]
         film_spend = {}
@@ -765,6 +807,7 @@ def run(dry_run: bool = True, root: str | Path | None = None, client=None) -> di
                               "closer": sum(i["group"] == "closer" for i in items),
                               "new_site": sum(i["group"] == "new_site" for i in items),
                               "changed": sum(i["group"] in CHANGED for i in items),
+                              "credit": sum(i["group"] == "credit" for i in items),
                               "tv": len(data["tv"])})
         _log_run(client, {"event": "issued", "run_at": datetime.now(timezone.utc),
                           "workbook": path.name, **q,
@@ -824,10 +867,10 @@ def status_markdown(result: dict):
         else:
             head = "### ✅ New workbook issued"
             body = (f"**File:** `{name}`  \n**On it:** "
-                    f"{lst['likely'] + lst['closer'] + lst['new_site'] + lst['changed']:,} "
+                    f"{lst['likely'] + lst['closer'] + lst['new_site'] + lst['changed'] + lst['credit']:,} "
                     "placements on "
                     f"1 · Placements ({lst['likely']:,} likely right, {lst['closer']:,} closer look, "
-                    f"{lst['new_site']:,} new site"
+                    f"{lst['new_site']:,} new site, {lst['credit']:,} credits"
                     + (f", {lst['changed']:,} decided before but spend changed"
                        if lst['changed'] else "")
                     + f") and {lst['tv']:,} codes on 2 · TV and radio."

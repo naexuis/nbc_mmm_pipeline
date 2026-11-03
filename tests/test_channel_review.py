@@ -222,9 +222,10 @@ def test_summary_tab_counts(tmp_path):
     head = next(i for i in range(1, 30) if ws.cell(row=i, column=1).value == "Film")
     films = [ws.cell(row=i, column=1).value for i in (head + 1, head + 2)]
     assert set(films) == {"FILM A", "FILM B"}
-    assert ws.cell(row=head, column=8).value == "Spend changed"
-    assert str(ws.cell(row=head + 1, column=9).value).startswith("=COUNTIFS(")
-    assert "Remove placement" in ws.cell(row=head + 1, column=9).value
+    assert ws.cell(row=head, column=8).value == "Credit"
+    assert ws.cell(row=head, column=9).value == "Spend changed"
+    assert str(ws.cell(row=head + 1, column=10).value).startswith("=COUNTIFS(")
+    assert "Remove placement" in ws.cell(row=head + 1, column=10).value
     assert ws.cell(row=head, column=2).value == "Release date"
     assert "Waiting for a later workbook" not in labels      # everything is on this workbook
 
@@ -295,3 +296,20 @@ def test_baseline_fills_only_missing(capsys):
         {"key_type": "prisma_placement", "key": "P9", "mmm_label": "X", "decided_spend": 5.0}]
     client.query_spend = True
     assert CR.baseline(dry_run=True, client=client) >= 0
+
+
+def test_credits_take_the_film_and_site_label():
+    placements = [
+        {"key": "P1", "imdb_id": "tt1", "site": "FACEBOOK.COM", "package_type": "Standalone",
+         "suggested_mmm": "SOCIAL_FACEBOOK", "suggested_plan": "SOCIAL_FACEBOOK", "group": "closer"},
+        {"key": "P2", "imdb_id": "tt1", "site": "Facebook", "package_type": "CreditPlacement",
+         "suggested_mmm": "CTVOTT_ROKU", "suggested_plan": "CTVOTT_ROKU", "group": "closer"},
+        {"key": "P3", "imdb_id": "tt2", "site": "YOUTUBE.COM", "package_type": "CreditPlacement",
+         "suggested_mmm": "CTVOTT_AMAZON_PRIME_VIDEO", "group": "closer"}]
+    training = [{"film": "tt2", "site": "YOUTUBE.COM", "mmm_label": "CTVOTT_YOUTUBE",
+                 "mediaplan_label": "VIDEO_YOUTUBE"}]
+    CR.suggest_credits(placements, training)
+    assert placements[1]["group"] == "credit" and placements[1]["suggested_mmm"] == "SOCIAL_FACEBOOK"
+    assert placements[2]["suggested_mmm"] == "CTVOTT_YOUTUBE"
+    assert placements[2]["suggested_plan"] == "VIDEO_YOUTUBE"
+    assert placements[0]["group"] == "closer"
