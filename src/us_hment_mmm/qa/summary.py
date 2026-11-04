@@ -76,7 +76,8 @@ def load(client=None) -> dict[str, pd.DataFrame]:
     client = client or bq_client()
     first = config.MMM_FIRST_RELEASE_DATE
     media, title = _core(config.MEDIA_DAILY_VIEW), _core(config.TITLE_TABLE)
-    in_scope = (f"JOIN `{title}` t USING (imdb_id) WHERE d.link = 'film' "
+    home_ent = f"d.media_owner = '{config.HOME_ENT_OWNER}'"
+    in_scope = (f"JOIN `{title}` t USING (imdb_id) WHERE d.link = 'film' AND {home_ent} "
                 f"AND d.spend_status = 'actual' AND t.release_date >= DATE '{first}'")
     return {
         "titles": _df(client, f"""
@@ -133,7 +134,11 @@ def load(client=None) -> dict[str, pd.DataFrame]:
             GROUP BY 1 ORDER BY 2 DESC"""),
         "scheduled": _df(client, f"""
             SELECT SUM(d.spend_usd) AS spend FROM `{media}` d JOIN `{title}` t USING (imdb_id)
-            WHERE d.link = 'film' AND d.spend_status = 'scheduled'
+            WHERE d.link = 'film' AND d.spend_status = 'scheduled' AND {home_ent}
+              AND t.release_date >= DATE '{first}'"""),
+        "theatrical": _df(client, f"""
+            SELECT SUM(d.spend_usd) AS spend FROM `{media}` d JOIN `{title}` t USING (imdb_id)
+            WHERE d.link = 'film' AND d.spend_status = 'actual' AND NOT {home_ent}
               AND t.release_date >= DATE '{first}'"""),
     }
 
@@ -161,6 +166,8 @@ def headline(data: dict) -> dict:
         "films_with_premium": int((f["premium"].fillna(0) != 0).sum()),
         "media": media, "prisma": float(f["prisma"].sum()), "tv": float(f["tv"].sum()),
         "scheduled": float(data["scheduled"]["spend"].fillna(0).sum()),
+        "theatrical": float(data.get("theatrical", pd.DataFrame({"spend": []}))["spend"]
+                            .fillna(0).sum()),
         "with_channel": media - no_channel - removed, "no_channel": no_channel,
         "removed": removed, "premium": float(f["premium"].sum()),
         "royalty_all": float(f["royalty_all"].sum()),
@@ -179,12 +186,14 @@ def headline_markdown(h: dict):
          f"not reviewed {h['in_mmm_unset']:,})"),
         ("… with media spend / with premium revenue",
          f"{h['films_with_media']:,} / {h['films_with_premium']:,}"),
-        ("Media spend that has run", f"**{_m(h['media'])}**  (Prisma {_m(h['prisma'])} · "
-                                     f"TV, audio and MVPD {_m(h['tv'])})"),
+        ("Home Ent media spend that has run (ZUE, ZUV)",
+         f"**{_m(h['media'])}**  (Prisma {_m(h['prisma'])} · TV, audio and MVPD {_m(h['tv'])})"),
         ("… booked but not run yet (scheduled)", _m(h["scheduled"])),
         ("… with a channel label", f"{_m(h['with_channel'])}  ({share:.0%})"),
         ("… still waiting for a channel (07_Review_Channels)", _m(h["no_channel"])),
         ("… removed in the channel review (not media we model)", _m(h["removed"])),
+        ("For reference: Focus theatrical media on these titles (ZFF, ZFE), not used",
+         _m(h["theatrical"])),
         ("Premium revenue used by the MMM (PVOD to EST − 1, US royalty)",
          f"**{_m(h['premium'])}**"),
         ("All US royalty linked to these titles", _m(h["royalty_all"])),
@@ -266,7 +275,7 @@ def chart_monthly(data: dict):
     revenue = r.groupby("month")["royalty"].sum()
     media, revenue = media[media.index >= start], revenue[revenue.index >= start]
     fig = go.Figure()
-    for i, (name, series) in enumerate((("Media spend that has run", media),
+    for i, (name, series) in enumerate((("Home Ent media spend", media),
                                         ("Premium revenue", revenue))):
         fig.add_trace(go.Scatter(
             x=series.index, y=series.values, mode="lines+markers",

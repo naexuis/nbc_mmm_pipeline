@@ -53,7 +53,9 @@ class FakeClient:
                           "last_day": date(2025, 1, 9), "spend": 100.0}]
 
     def query(self, sql):
-        if "media_prisma_daily` WHERE link = 'film'" in sql:
+        if ("media_prisma_daily` WHERE link = 'film'" in sql
+                or ("WHERE link = 'film' AND business_code IN ('ZUE', 'ZUV')" in sql
+                    and "ANY_VALUE(site)" in sql)):
             rows = self.placements
         elif "title_name AS film" in sql:
             rows = self.tv_films
@@ -321,3 +323,25 @@ def test_removals_do_not_count_as_disagreeing():
                    "likely_acc": 0.99, "closer_acc": 0.9, "new_acc": 0.3, "workbook": "a"}],
          "quality": None, "workbook": "a"}
     assert "Last round" not in CR.quality_markdown(r).data
+
+
+def test_review_lists_home_ent_media_only():
+    client = FakeClient()
+    seen = []
+    real = client.query
+    client.query = lambda sql: (seen.append(sql), real(sql))[1]
+    CR.gather(client)
+    prisma = next(q for q in seen if "ANY_VALUE(site)" in q)
+    tv = next(q for q in seen if "STRING_AGG(DISTINCT source" in q)
+    for q in (prisma, tv):
+        assert "business_code IN ('ZUE', 'ZUV')" in q          # ZFF / ZFE are Focus theatrical
+
+
+def test_baseline_moves_tv_codes_to_home_ent_spend(capsys):
+    client = FakeClient()
+    client.tv = [{"key": "STATION WNBC-TV", "spend": 300.0, "spend_all": 1300.0}]
+    client.tables["channel_label"] = [
+        {"key_type": "tv_network", "key": "STATION WNBC-TV", "mmm_label": "SPOTTV_LOCALTV",
+         "decided_spend": 1300.0}]                              # recorded with all clients
+    CR.baseline(dry_run=False, client=client)
+    assert client.tables["channel_label"][0]["decided_spend"] == 300.0

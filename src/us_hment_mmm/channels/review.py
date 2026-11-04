@@ -616,7 +616,8 @@ def gather(client) -> dict:
                  ANY_VALUE(placement_name) AS name, ANY_VALUE(buy_type) AS buy_type,
                  ANY_VALUE(package_type) AS package_type, MIN(spend_date) AS first_day,
                  MAX(spend_date) AS last_day, SUM(spend_usd) AS spend
-          FROM `{_core(config.MEDIA_PRISMA_CORE_TABLE)}` WHERE link = 'film' GROUP BY 1)
+          FROM `{_core(config.MEDIA_PRISMA_CORE_TABLE)}`
+          WHERE link = 'film' AND {L.home_ent_sql('business_code')} GROUP BY 1)
         SELECT 'prisma_placement' AS key_type, p.*, t.title_name AS film, t.release_date,
                l.key IS NOT NULL AS was_decided, l.decided_spend AS was_spend,
                l.mmm_label AS current_mmm, l.mediaplan_label AS current_plan
@@ -628,7 +629,8 @@ def gather(client) -> dict:
     tv_base = f"""
         SELECT m.*, t.title_name, t.release_date
         FROM `{_core(config.MEDIA_TV_CORE_TABLE)}` m JOIN `{title_t}` t USING (imdb_id)
-        WHERE m.link = 'film' AND t.release_date >= DATE '{first}'"""
+        WHERE m.link = 'film' AND t.release_date >= DATE '{first}'
+          AND {L.home_ent_sql('m.business_code')}"""
     tv = _q(client, f"""
         WITH c AS (
           SELECT channel_code AS key, STRING_AGG(DISTINCT media_name, ', ') AS media,
@@ -730,16 +732,28 @@ def baseline(dry_run: bool = True, client=None) -> int:
     spend = {("prisma_placement", r["key"]): float(r["spend"] or 0) for r in _q(client, f"""
         SELECT placement_number AS key, SUM(spend_usd) AS spend
         FROM `{_core(config.MEDIA_PRISMA_CORE_TABLE)}` WHERE link = 'film' GROUP BY 1""")}
-    spend.update({("tv_network", r["key"]): float(r["spend"] or 0) for r in _q(client, f"""
-        SELECT m.channel_code AS key, SUM(m.spend_usd) AS spend
+    # TV codes are shared by all clients. Their starting point is Home Ent spend only (the
+    # channel review compares Home Ent spend). Codes recorded earlier with all-client spend
+    # that has not moved since are switched to Home Ent spend (spend_all).
+    tv_rows = _q(client, f"""
+        SELECT m.channel_code AS key, SUM(m.spend_usd) AS spend_all,
+               SUM(IF({L.home_ent_sql('m.business_code')}, m.spend_usd, 0)) AS spend
         FROM `{_core(config.MEDIA_TV_CORE_TABLE)}` m JOIN `{title_t}` t USING (imdb_id)
         WHERE m.link = 'film' AND t.release_date >= DATE '{config.MMM_FIRST_RELEASE_DATE}'
-        GROUP BY 1""")})
+        GROUP BY 1""")
+    spend.update({("tv_network", r["key"]): float(r["spend"] or 0) for r in tv_rows})
+    spend_all = {("tv_network", r["key"]): float(r.get("spend_all", r["spend"]) or 0)
+                 for r in tv_rows}
     rows = _q(client, f"SELECT * FROM `{labels_t}`")
     filled = 0
     for r in rows:
         k = (r["key_type"], r["key"])
-        if r.get("decided_spend") is None and k in spend:
+        old = r.get("decided_spend")
+        if old is None and k in spend:
+            r["decided_spend"] = spend[k]
+            filled += 1
+        elif (k in spend_all and old is not None and abs(old - spend_all[k]) <= SPEND_CHANGE
+              and abs(spend[k] - spend_all[k]) > SPEND_CHANGE):
             r["decided_spend"] = spend[k]
             filled += 1
     snap = _q(client, f"SELECT MAX(snapshot_date) AS d FROM "

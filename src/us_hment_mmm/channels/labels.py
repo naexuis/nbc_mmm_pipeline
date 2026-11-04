@@ -173,6 +173,16 @@ def _parent_sql(col: str) -> str:
             f"'{config.CHANNEL_NEEDS_LABEL}'))")
 
 
+def _owner_sql(col: str) -> str:
+    whens = " ".join(f"WHEN '{c}' THEN '{o}'" for c, o in config.MEDIA_OWNERS.items())
+    return f"CASE {col} {whens} ELSE 'unknown' END"
+
+
+def home_ent_sql(col: str) -> str:
+    """SQL test that a business code is a Home Entertainment client (ZUE, ZUV)."""
+    return f"{col} IN ({', '.join(repr(c) for c in config.HOME_ENT_CLIENTS)})"
+
+
 def view_sql() -> str:
     labels = _core(config.CHANNEL_LABEL_TABLE)
     return f"""
@@ -182,7 +192,8 @@ SELECT 'Prisma' AS media_source, p.snapshot_date, p.business_code, p.business_gr
        p.cost_basis, 'prisma_placement' AS label_key_type, p.placement_number AS label_key,
        p.site AS media_partner, p.placement_name AS media_detail, p.campaign_name,
        CAST(NULL AS INT64) AS spots,
-       l.mediaplan_label, l.mmm_label, {_parent_sql('l.mmm_label')} AS channel_parent
+       l.mediaplan_label, l.mmm_label, {_parent_sql('l.mmm_label')} AS channel_parent,
+       {_owner_sql('p.business_code')} AS media_owner
 FROM `{_core(config.MEDIA_PRISMA_CORE_TABLE)}` p
 LEFT JOIN `{labels}` l ON l.key_type = 'prisma_placement' AND l.key = p.placement_number
 UNION ALL
@@ -190,7 +201,8 @@ SELECT t.source, t.snapshot_date, t.business_code, t.business_group, t.product_c
        t.link, t.spend_date, t.spend_usd, t.spend_status, t.cost_basis,
        'tv_network', t.channel_code, COALESCE(l.name, t.channel_code), t.media_name,
        CAST(NULL AS STRING), t.spots,
-       l.mediaplan_label, l.mmm_label, {_parent_sql('l.mmm_label')}
+       l.mediaplan_label, l.mmm_label, {_parent_sql('l.mmm_label')},
+       {_owner_sql('t.business_code')}
 FROM `{_core(config.MEDIA_TV_CORE_TABLE)}` t
 LEFT JOIN `{labels}` l ON l.key_type = 'tv_network' AND l.key = t.channel_code
 """

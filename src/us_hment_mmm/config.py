@@ -34,6 +34,16 @@ MEDIA_MEDIAOCEAN_FOLDER = "nbc-netpak-spotpak"
 # ZUV (MVPD, in Mediaocean) buys for UP Home Ent titles with UP Home Ent codes.
 MEDIA_BUSINESS_GROUPS = {"ZUE": "UP_HE", "ZUV": "UP_HE", "ZFF": "FOCUS", "ZFE": "FOCUS"}
 
+# Who bought the media (Marcus, 2026-11-03). Home Entertainment buys under ZUE and ZUV, for
+# Universal and Focus titles alike. ZFF and ZFE are the Focus theatrical campaigns and ZUP is
+# Universal Pictures theatrical (not loaded). Every row is kept in the core tables; the MMM,
+# the channel review, the QA summary and the dashboards use Home Ent media only.
+MEDIA_OWNERS = {"ZUE": "home_ent", "ZUV": "home_ent",
+                "ZFF": "focus_theatrical", "ZFE": "focus_theatrical",
+                "ZUP": "universal_theatrical"}
+HOME_ENT_OWNER = "home_ent"
+HOME_ENT_CLIENTS = tuple(c for c, o in MEDIA_OWNERS.items() if o == HOME_ENT_OWNER)
+
 # File type (token in the file name) -> raw table name.
 MEDIA_PRISMA_TYPES = {
     "PrismaCampaigns": "prisma_campaigns",

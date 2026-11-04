@@ -60,3 +60,11 @@ def test_network_rows_leave_conflicts_for_review():
 def test_view_marks_missing_labels():
     sql = L.view_sql()
     assert "NEEDS A CHANNEL" in sql and "UNION ALL" in sql and "media_tv_daily" in sql
+
+
+def test_view_marks_who_bought_the_media():
+    from us_hment_mmm.channels import labels as L
+
+    sql = L.view_sql()
+    assert sql.count("AS media_owner") == 1 and sql.count("WHEN 'ZFE' THEN 'focus_theatrical'") == 2
+    assert "WHEN 'ZUV' THEN 'home_ent'" in sql
