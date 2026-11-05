@@ -18,7 +18,7 @@ def _summary(**kw):
 
 def test_sql_applies_the_agreed_filters():
     sql = b.table_sql()
-    assert "data_source" in sql and "'Amazon Sale'" in sql
+    assert "data_source" in sql and "'Amazon Sale'" not in sql      # every source is kept
     assert f"country_cd) = '{config.REVENUE_COUNTRY}'" in sql
     assert "alias_type = 'revenue_product_id'" in sql and "category = 'film'" in sql
     assert "MAX(_delivery_date)" in sql
@@ -76,3 +76,11 @@ def test_run_write_passes_when_totals_match():
     c = _Client([[_summary()], [], [], [check]])
     r = b.run(dry_run=False, client=c)
     assert r["status"] == "PASS" and any("CREATE OR REPLACE TABLE" in s for s in c.sql)
+
+
+def test_amazon_overlap_stops_the_build():
+    assert "'Amazon Royalty', 'Amazon Sale'" in b.summary_sql()
+    s = _summary(overlap_days=3, overlap_examples="123 2026-01-02")
+    assert any("both Amazon Royalty and Amazon Sale" in n for n in b._notes(s))
+    client = SimpleNamespace(query=lambda sql: SimpleNamespace(result=lambda: [s]))
+    assert b.run(dry_run=False, client=client)["status"] == "NOT_WRITTEN"

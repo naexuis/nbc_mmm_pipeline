@@ -99,3 +99,13 @@ def test_fingerprint_changes_when_a_file_changes():
     assert a.fingerprint() == b.fingerprint()
     b.files[0] = SourceFile(b.files[0].name, b.files[0].size, 2)   # new GCS generation
     assert a.fingerprint() != b.fingerprint()
+
+
+def test_canada_has_its_own_folder_and_table():
+    from us_hment_mmm import config
+    from us_hment_mmm.revenue import load_raw
+
+    can = load_raw._spec("can")
+    assert can["prefix"] == "hment_rev_can/" and can["table"] == "revenue_pos_can"
+    assert can["source"] != config.REVENUE_SPEC["source"]
+    assert load_raw._spec("USA") is config.REVENUE_SPEC

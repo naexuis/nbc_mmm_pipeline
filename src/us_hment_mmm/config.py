@@ -95,9 +95,11 @@ MMM_FIRST_RELEASE_DATE = "2023-01-01"            # the MMM uses titles released 
 # ---- Revenue source (exported by hand from NBC GCP) ------------------------
 REVENUE_BUCKET = "nbcu-marcus-hilliard"
 REVENUE_US_PREFIX = "hment_rev_usa/"
+REVENUE_CAN_PREFIX = "hment_rev_can/"   # Canada: same export, country_cd = 'CAN' (CHTT check only)
 
 # Raw revenue table: one partition per delivery (each delivery is full history).
 REVENUE_RAW_TABLE = "revenue_pos_usa"
+REVENUE_RAW_TABLE_CAN = "revenue_pos_can"   # never used by the MMM; for the CHTT reconciliation
 # How many deliveries to keep in the raw table (older ones are removed).
 REVENUE_KEEP_DELIVERIES = 2
 # Columns the rest of the pipeline relies on; a delivery without them is rejected.
@@ -113,8 +115,13 @@ REVENUE_REQUIRED_COLUMNS = (
 REVENUE_CORE_TABLE = "revenue_film_daily"        # film x day x retailer, every day sold
 REVENUE_PREMIUM_VIEW = "revenue_premium_daily"   # film x day, premium window, pre-sales on PVOD day
 REVENUE_COUNTRY = "USA"                          # the MMM uses US revenue only (Canada is for CHTT checks)
-# Data sources left out of the MMM. For Amazon the MMM uses "Amazon Royalty" only.
-REVENUE_EXCLUDE_SOURCES = ("Amazon Sale",)
+# Data sources left out of the MMM (none). Amazon is reported under two data sources that take
+# turns (checked 2026-11-04): "Amazon Sale" through Dec 2023, "Amazon Royalty" Jan 2024 - Oct
+# 2025 (Amazon Sale rows are $0 then), "Amazon Sale" again from Nov 2025. Both are kept.
+REVENUE_EXCLUDE_SOURCES: tuple[str, ...] = ()
+# Sources that must never both carry money for the same product and day; the core revenue
+# build stops if they do (it would count that revenue twice).
+REVENUE_EXCLUSIVE_SOURCES = ("Amazon Royalty", "Amazon Sale")
 
 # ---- Reference CSVs copied by hand from NBC GCP (one dated file per copy) ---
 # Each source: folder in REVENUE_BUCKET, file-name pattern (date in group 1), raw table,
@@ -155,6 +162,12 @@ REVENUE_SPEC = {
     "date_col": "transaction_date", "amount_col": "royalty_total_usd",
     "first_label": "First sale", "last_label": "Last sale", "amount_label": "Royalty (USD)",
 }
+
+# Canada revenue: same export and checks as the US, its own folder and table. Used only to
+# reconcile with Finance's CHTT (which is US + Canada), never by the MMM.
+REVENUE_CAN_SPEC = {**REVENUE_SPEC, "source": "revenue_can", "label": "REVENUE LOAD (CANADA)",
+                    "description": "Canada HE digital POS revenue (royalty and retail, by sale)",
+                    "prefix": REVENUE_CAN_PREFIX, "table": REVENUE_RAW_TABLE_CAN}
 
 # US cinema box office (Comscore daily gross per theater and title), copied by hand.
 # Opening weekend = release day (Thursday or Friday) through Sunday, inclusive.

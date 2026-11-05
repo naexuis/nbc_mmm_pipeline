@@ -11,7 +11,8 @@ Build the core revenue tables (us_hment_mmm_core) from the newest raw US revenue
                          (PVOD to EST - 1). Pre-sales are added to the PVOD day. This is
                          the revenue the MMM uses.
 
-Rules (decision log): US rows only; "Amazon Sale" rows are left out (Amazon = "Amazon Royalty");
+Rules (decision log): US rows only; every data source is kept (Amazon comes from "Amazon Sale"
+or "Amazon Royalty", which take turns; the build stops if both carry the same product and day);
 revenue links to a film through its revenue product IDs (title_alias, product_id1); films
 and dates come from the title table.
 
@@ -53,7 +54,8 @@ sales AS (
   SELECT TRIM(product_id1) AS product_id,
          SAFE.PARSE_DATE('%Y-%m-%d', TRIM(transaction_date)) AS transaction_date,
          IFNULL(NULLIF(TRIM(licensee_grouping_name), ''), '(blank)') AS retailer,
-         {ROYALTY} AS royalty_usd, {UNITS} AS units_sold, _delivery_date
+         {ROYALTY} AS royalty_usd, {UNITS} AS units_sold, _delivery_date,
+         TRIM(data_source) AS data_source
   FROM `{raw}`
   WHERE _delivery_date = (SELECT d FROM delivery)
     AND TRIM(country_cd) = '{config.REVENUE_COUNTRY}'
@@ -110,6 +112,11 @@ def summary_sql() -> str:
     return f"""
 WITH {_sources_cte()},
 shared AS (SELECT product_id FROM links GROUP BY product_id HAVING COUNT(*) > 1),
+overlap AS (
+  SELECT product_id, transaction_date FROM sales
+  WHERE data_source IN ({", ".join(repr(x) for x in config.REVENUE_EXCLUSIVE_SOURCES)})
+    AND royalty_usd != 0
+  GROUP BY 1, 2 HAVING COUNT(DISTINCT data_source) > 1),
 films AS (SELECT DISTINCT imdb_id FROM links),
 by_film AS (
   SELECT l.imdb_id,
@@ -146,7 +153,10 @@ SELECT
   (SELECT COUNT(*) FROM by_film b JOIN `{title}` t USING (imdb_id)
      WHERE t.pvod_date IS NOT NULL AND t.est_date IS NULL) AS films_no_est,
   (SELECT COUNT(*) FROM shared) AS shared_ids,
-  (SELECT STRING_AGG(product_id, ', ' LIMIT 10) FROM shared) AS shared_examples
+  (SELECT STRING_AGG(product_id, ', ' LIMIT 10) FROM shared) AS shared_examples,
+  (SELECT COUNT(*) FROM overlap) AS overlap_days,
+  (SELECT STRING_AGG(CONCAT(product_id, ' ', CAST(transaction_date AS STRING)), ', ' LIMIT 5)
+     FROM overlap) AS overlap_examples
 """
 
 
@@ -199,6 +209,11 @@ def _notes(s) -> list[str]:
         notes.append(f"{s.shared_ids} revenue product ID(s) are linked to more than one film "
                      f"(e.g. {s.shared_examples}). Fix them in 05_Review_Titles before writing; "
                      "otherwise that revenue would be counted twice.")
+    if getattr(s, "overlap_days", 0):
+        notes.append(f"{s.overlap_days:,} product-day(s) have money in both "
+                     f"{' and '.join(config.REVENUE_EXCLUSIVE_SOURCES)} (e.g. {s.overlap_examples}). "
+                     "NBC has changed how Amazon is reported; this would count that revenue twice. "
+                     "Nothing can be written until the pipeline owner has checked it.")
     return notes
 
 
@@ -215,8 +230,8 @@ def sections(s) -> dict:
         ("Used by the MMM (pre-sales + premium)", used),
     ]
     return {
-        "facts": (f"Revenue delivery **{s.delivery}** · US rows only · left out: "
-                  f"{', '.join(config.REVENUE_EXCLUDE_SOURCES)} · {s.films_with_ids} films have "
+        "facts": (f"Revenue delivery **{s.delivery}** · US rows only · data sources left out: "
+                  f"{', '.join(config.REVENUE_EXCLUDE_SOURCES) or 'none'} · {s.films_with_ids} films have "
                   f"revenue product IDs ({s.films_with_revenue} with revenue in this delivery)"),
         "tables": [{"title": "Royalty", "columns": ["Item", "Royalty"], "money": ["Royalty"],
                     "rows": rows, "bold_last": True}],
@@ -242,6 +257,11 @@ def run(dry_run: bool = True, client=None) -> dict:
     if dry_run:
         return {"lines": lines, **sec, "status": "CHECKED",
                 "message": "Nothing was written. To save, set DRY_RUN = False and run again."}
+    if getattr(s, "overlap_days", 0):
+        return {"lines": lines, **sec, "status": "NOT_WRITTEN",
+                "message": "Not written: Amazon revenue appears in two data sources on the same "
+                           "days (see the notes below). Save this notebook and send it to the "
+                           "pipeline owner."}
     if s.shared_ids:
         return {"lines": lines, **sec, "status": "NOT_WRITTEN",
                 "message": "Not written: some revenue product IDs are linked to more than one "
