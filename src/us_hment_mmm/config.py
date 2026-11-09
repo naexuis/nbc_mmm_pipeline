@@ -75,6 +75,15 @@ CHANNEL_PARENTS = ("DISPLAY_VIDEO", "CTVOTT", "STREAMING", "PROGRAMMATIC", "SOCI
                    "AUDIO", "OOH", "PRINT", "MVPD", "CABLE", "NETWORK", "SPOTTV", "LINEAR",
                    "VIDEO", "FEE")
 CHANNEL_NEEDS_LABEL = "NEEDS A CHANNEL"
+# Model channels (Marcus, as in the last MMM): parent label -> the channel the MMM and the
+# dashboards show. FEE is left out (fees vary by title). SPOTTV -> Linear until confirmed.
+MODEL_CHANNELS = {"CTVOTT": "CTV/OTT", "MVPD": "MVPD", "DISPLAY_VIDEO": "Display/Video",
+                  "VIDEO": "Display/Video", "STREAMING": "Streaming", "PRINT": "Print",
+                  "AUDIO": "Audio", "OOH": "OOH", "CABLE": "Linear", "NETWORK": "Linear",
+                  "LINEAR": "Linear", "SPOTTV": "Linear", "PROGRAMMATIC": "Programmatic",
+                  "SEARCH": "Programmatic", "SOCIAL": "Social"}
+MODEL_CHANNEL_NONE = "No channel yet"
+DASHBOARD_VIEW_PREFIX = "dash_"
 # Label stored for a placement or code removed in the channel review (not media we model).
 CHANNEL_REMOVED = "REMOVED"
 # Network dictionary label -> MMM label where they differ (old ZUE notebook overrides).
