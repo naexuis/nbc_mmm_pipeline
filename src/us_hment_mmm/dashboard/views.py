@@ -144,6 +144,17 @@ def run(write: bool = False, client=None) -> list[str]:
     return lines
 
 
+def markdown(lines: list[str], dry_run: bool):
+    """Notebook message for run()'s lines."""
+    from IPython.display import Markdown
+
+    head = ("🔎 **CHECK ONLY — nothing was written.** BigQuery checked every view."
+            if dry_run else "✅ **SAVED** — the dashboard views were re-created.")
+    body = "\n".join(f"- `{ln.split()[1].split('.')[-1]}` {ln.split('(', 1)[1].rstrip(')')}"
+                     for ln in lines if ln.startswith(("OK", "SAVED")))
+    return Markdown(f"{head}\n\n{body}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Create the dashboard views (dash_*).")
     ap.add_argument("--write", action="store_true", help="create or replace the views")

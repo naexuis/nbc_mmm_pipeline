@@ -24,3 +24,9 @@ def test_comp_mix_has_every_channel_and_the_title_total():
 def test_names():
     assert set(V.VIEWS) == {"title", "media_daily", "revenue_daily", "comp_mix"}
     assert V.view_name("title").endswith(".dash_title")
+
+
+def test_notebook_message():
+    lines = ["SAVED prj.us_hment_mmm_core.dash_title  (14 columns)", "Saved."]
+    md = V.markdown(lines, dry_run=False).data
+    assert "SAVED" in md and "`dash_title` 14 columns" in md
