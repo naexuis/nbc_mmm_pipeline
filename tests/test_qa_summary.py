@@ -48,6 +48,28 @@ class FakeClient:
                                 "media_source": "Prisma", "spend": 1e5},
                                {"channel_parent": config.CHANNEL_REMOVED,
                                 "media_source": "Prisma", "spend": 5e4}])
+        elif "total_digital_premium_revenue" in sql:
+            df = pd.DataFrame([
+                {"imdb_id": "tt1", "title_name": "OK FILM", "release_date": "2024-03-01",
+                 "distributor": "UNIVERSAL", "in_mmm": True, "pvod_date": "2024-04-01",
+                 "est_date": "2024-05-01", "us_premium": 850.0, "can_premium": 30.0,
+                 "finance": 1000.0, "fin_pvod": "2024-04-01", "fin_est": "2024-05-01",
+                 "last_sale": "2026-10-29"},
+                {"imdb_id": "tt3", "title_name": "LOW FILM", "release_date": "2024-06-01",
+                 "distributor": "FOCUS", "in_mmm": None, "pvod_date": "2024-07-01",
+                 "est_date": "2024-08-01", "us_premium": 500.0, "can_premium": 0.0,
+                 "finance": 1000.0, "fin_pvod": "2024-07-08", "fin_est": "2024-08-01",
+                 "last_sale": "2026-10-29", "us_fin_dates": 900.0, "can_fin_dates": 0.0,
+                 "est_reason": "NBC enrichment date accepted", "est_by": "mdh",
+                 "est_on": "2026-11-01"},
+                {"imdb_id": "tt4", "title_name": "OPEN FILM", "release_date": "2026-09-01",
+                 "distributor": "UNIVERSAL", "in_mmm": None, "pvod_date": "2026-10-01",
+                 "est_date": "2026-11-20", "us_premium": 100.0, "can_premium": 5.0,
+                 "finance": 1000.0, "fin_pvod": None, "fin_est": None, "last_sale": "2026-10-29"},
+                {"imdb_id": "tt5", "title_name": "NO FIN", "release_date": "2024-01-01",
+                 "distributor": "NEON", "in_mmm": None, "pvod_date": "2024-02-01",
+                 "est_date": "2024-03-01", "us_premium": 100.0, "can_premium": None,
+                 "finance": None, "fin_pvod": None, "fin_est": None, "last_sale": "2026-10-29"}])
         elif "DATE_TRUNC(p.revenue_date" in sql:
             df = pd.DataFrame([{"month": m, "royalty": 2e5} for m in ("2022-12-01", "2024-03-01")])
         elif "DATE_TRUNC" in sql:
@@ -134,3 +156,24 @@ def test_save_film_csv(tmp_path):
     saved = pd.read_csv(files[0])
     assert list(saved["Title"]) == ["FILM A", "FILM B"]
     assert saved.loc[0, "IMDb ID"] == "tt1" and saved.loc[0, "Media spend"] == 1_500_000
+
+
+def test_chtt_reconciliation():
+    data = Q.load(FakeClient())
+    f = Q.recon_frame(data).set_index("imdb_id")
+    assert f.loc["tt1", "ours"] == 880 and f.loc["tt1", "status"] == Q.RECON_OK      # -12%
+    assert f.loc["tt3", "status"] == Q.RECON_CHECK                                   # -50%
+    assert "Finance PVOD 2024-07-08" in f.loc["tt3", "date_note"]
+    assert f.loc["tt4", "status"] == Q.RECON_OPEN                     # EST after the last sale
+    assert f.loc["tt5", "status"] == Q.RECON_NO_FINANCE
+    md = Q.recon_markdown(data).data
+    assert "Titles compared (premium window over) | 2 |" in md
+    table = Q.recon_table(data).data
+    assert table.iloc[0]["Status"] == Q.RECON_CHECK and table.iloc[0]["Gap %"] == "-50.0%"
+    assert round(f.loc["tt3", "gap_pct_fin_dates"], 2) == -0.10
+    assert f.loc["tt3", "est_source"].startswith("NBC enrichment date accepted (mdh")
+    assert f.loc["tt1", "est_source"] == ""
+    assert "Ours with Finance EST" in table.columns
+    sql = Q.chtt_sql()
+    assert "COALESCE(f.f_est, t.est_date)" in sql and "field = 'est_date'" in sql
+    assert "revenue_pos_can" in sql and "country_cd) = 'CAN'" in sql and "c.day < t.est_date" in sql

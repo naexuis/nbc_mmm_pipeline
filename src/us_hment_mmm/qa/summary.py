@@ -132,6 +132,7 @@ def load(client=None) -> dict[str, pd.DataFrame]:
             WHERE r.revenue_window IN ('before_pvod', 'premium')
               AND t.release_date >= DATE '{first}'
             GROUP BY 1 ORDER BY 2 DESC"""),
+        "chtt": _df(client, chtt_sql()),
         "scheduled": _df(client, f"""
             SELECT SUM(d.spend_usd) AS spend FROM `{media}` d JOIN `{title}` t USING (imdb_id)
             WHERE d.link = 'film' AND d.spend_status = 'scheduled' AND {home_ent}
@@ -450,3 +451,235 @@ def save_film_csv(data: dict, folder: str | None = None):
     return Markdown(f"✅ Saved **{len(out):,}** titles to `{name}`.\n\n**Where to find it:** "
                     + where_to_find(root.name, root.parent)
                     + "  \nClick the file name to download it. It opens in Excel.")
+
+
+# =============================================================================
+# Revenue vs Finance (Standard CHTT)
+# =============================================================================
+# Ours = US + Canada royalty from the PVOD date to the day before EST, pre-sales included (the
+# same window as the MMM's premium revenue, our title dates). Finance = CHTT
+# total_digital_premium_revenue (PVOD + PEST), which is US + Canada. POS royalty normally lands
+# 5-21% under Finance, because POS does not hold every revenue source Finance reports.
+RECON_UNDER = -0.20      # flag when ours is more than 20% under Finance
+RECON_OVER = 0.05        # ... or more than 5% over
+RECON_OK, RECON_CHECK, RECON_OPEN = "Within range", "Check", "Window still open"
+RECON_NO_FINANCE, RECON_NO_POS = "No Finance figure", "No POS revenue"
+
+
+def chtt_sql() -> str:
+    first = config.MMM_FIRST_RELEASE_DATE
+    title = _core(config.TITLE_TABLE)
+    can = config.table_id(config.DATASET_RAW, config.REVENUE_RAW_TABLE_CAN)
+    chtt = config.table_id(config.DATASET_RAW, config.REFERENCE_SOURCES["std_chtt"]["table"])
+    money = "SAFE_CAST(REPLACE(REPLACE(TRIM(CAST({} AS STRING)), '$', ''), ',', '') AS FLOAT64)"
+    return f"""
+        WITH links AS (
+          SELECT DISTINCT TRIM(alias_value) AS pid, imdb_id FROM `{_core(config.TITLE_ALIAS_TABLE)}`
+          WHERE alias_type = 'revenue_product_id' AND category = 'film' AND imdb_id IS NOT NULL),
+        can AS (
+          SELECT TRIM(product_id1) AS pid,
+                 SAFE.PARSE_DATE('%Y-%m-%d', TRIM(transaction_date)) AS day,
+                 {money.format('royalty_total_usd')} AS usd
+          FROM `{can}` WHERE _delivery_date = (SELECT MAX(_delivery_date) FROM `{can}`)
+            AND TRIM(country_cd) = 'CAN'),
+        fin_dates AS (
+          SELECT imdb_id,
+                 ANY_VALUE(IF(d_pvod >= '2000-01-01', d_pvod, NULL)) AS f_pvod,
+                 ANY_VALUE(IF(d_est >= '2000-01-01', d_est, NULL)) AS f_est
+          FROM (SELECT imdb_id, SAFE.PARSE_DATE('%Y-%m-%d', TRIM(CAST(premium_release_date AS STRING)))
+                         AS d_pvod,
+                       SAFE.PARSE_DATE('%Y-%m-%d', TRIM(CAST(est_release_date AS STRING))) AS d_est
+                FROM `{chtt}` WHERE _delivery_date = (SELECT MAX(_delivery_date) FROM `{chtt}`))
+          GROUP BY 1),
+        can_film AS (
+          SELECT l.imdb_id, SUM(c.usd) AS can_premium
+          FROM can c JOIN links l USING (pid) JOIN `{title}` t USING (imdb_id)
+          WHERE t.pvod_date IS NOT NULL AND (t.est_date IS NULL OR c.day < t.est_date)
+          GROUP BY 1),
+        can_fin AS (       -- the same, with Finance's EST date (ours when Finance has none)
+          SELECT l.imdb_id, SUM(c.usd) AS can_fin_dates
+          FROM can c JOIN links l USING (pid) JOIN `{title}` t USING (imdb_id)
+          LEFT JOIN fin_dates f USING (imdb_id)
+          WHERE t.pvod_date IS NOT NULL
+            AND (COALESCE(f.f_est, t.est_date) IS NULL OR c.day < COALESCE(f.f_est, t.est_date))
+          GROUP BY 1),
+        us AS (SELECT imdb_id, SUM(royalty_usd) AS us_premium
+               FROM `{_core(config.REVENUE_PREMIUM_VIEW)}` GROUP BY 1),
+        us_fin AS (
+          SELECT r.imdb_id, SUM(r.royalty_usd) AS us_fin_dates
+          FROM `{_core(config.REVENUE_CORE_TABLE)}` r JOIN `{title}` t USING (imdb_id)
+          LEFT JOIN fin_dates f USING (imdb_id)
+          WHERE t.pvod_date IS NOT NULL
+            AND (COALESCE(f.f_est, t.est_date) IS NULL
+                 OR r.transaction_date < COALESCE(f.f_est, t.est_date))
+          GROUP BY 1),
+        est_source AS (    -- the newest change to our EST date: who and why
+          SELECT record_key AS imdb_id,
+                 ARRAY_AGG(STRUCT(reason, changed_by, changed_at)
+                           ORDER BY changed_at DESC LIMIT 1)[OFFSET(0)] AS h
+          FROM `{_core(config.TITLE_HISTORY_TABLE)}`
+          WHERE table_name = '{config.TITLE_TABLE}' AND field = 'est_date' GROUP BY 1),
+        fin AS (
+          SELECT imdb_id, SUM({money.format('total_digital_premium_revenue')}) AS finance,
+                 ANY_VALUE(TRIM(CAST(premium_release_date AS STRING))) AS fin_pvod,
+                 ANY_VALUE(TRIM(CAST(est_release_date AS STRING))) AS fin_est
+          FROM `{chtt}` WHERE _delivery_date = (SELECT MAX(_delivery_date) FROM `{chtt}`)
+          GROUP BY 1),
+        last_sale AS (SELECT MAX(transaction_date) AS d FROM `{_core(config.REVENUE_CORE_TABLE)}`)
+        SELECT t.imdb_id, t.title_name, t.release_date, t.distributor, t.in_mmm,
+               t.pvod_date, t.est_date, us.us_premium, can_film.can_premium, fin.finance,
+               fin.fin_pvod, fin.fin_est, (SELECT d FROM last_sale) AS last_sale,
+               us_fin.us_fin_dates, can_fin.can_fin_dates,
+               es.h.reason AS est_reason, es.h.changed_by AS est_by,
+               CAST(DATE(es.h.changed_at) AS STRING) AS est_on
+        FROM `{title}` t LEFT JOIN us USING (imdb_id) LEFT JOIN can_film USING (imdb_id)
+        LEFT JOIN fin USING (imdb_id) LEFT JOIN us_fin USING (imdb_id)
+        LEFT JOIN can_fin USING (imdb_id) LEFT JOIN est_source es USING (imdb_id)
+        WHERE t.release_date >= DATE '{first}' AND t.pvod_date IS NOT NULL
+          AND t.pvod_date <= (SELECT d FROM last_sale)
+          AND (us.imdb_id IS NOT NULL OR fin.imdb_id IS NOT NULL)"""
+
+
+def recon_frame(data: dict) -> pd.DataFrame:
+    """One row per title: ours (US + Canada premium royalty) against Finance, with a status."""
+    f = data.get("chtt", pd.DataFrame()).copy()
+    if f.empty:
+        return f
+    for c in ("us_premium", "can_premium", "finance", "us_fin_dates", "can_fin_dates"):
+        f[c] = pd.to_numeric(f.get(c), errors="coerce").fillna(0.0) if c in f else 0.0
+    f["ours"] = f["us_premium"] + f["can_premium"]
+    f["gap"] = f["ours"] - f["finance"]
+    f["gap_pct"] = f.apply(lambda r: r["gap"] / r["finance"] if r["finance"] else None, axis=1)
+    f["ours_fin_dates"] = f["us_fin_dates"] + f["can_fin_dates"]
+    f["gap_pct_fin_dates"] = f.apply(lambda r: (r["ours_fin_dates"] - r["finance"]) / r["finance"]
+                                     if r["finance"] else None, axis=1)
+    for c in ("est_reason", "est_by", "est_on"):
+        if c not in f:
+            f[c] = None
+    f["est_source"] = [
+        "" if pd.isna(r["est_reason"]) else
+        f"{str(r['est_reason'])[:90]} ({r['est_by']}, {r['est_on']})" for _, r in f.iterrows()]
+    day = lambda c: pd.to_datetime(f[c], errors="coerce")  # noqa: E731
+    still_open = day("est_date").isna() | (day("est_date") > day("last_sale"))
+
+    def status(r, open_):
+        if not r["finance"]:
+            return RECON_NO_FINANCE
+        if not r["ours"]:
+            return RECON_NO_POS
+        if open_:
+            return RECON_OPEN
+        return RECON_OK if RECON_UNDER <= r["gap_pct"] <= RECON_OVER else RECON_CHECK
+    f["status"] = [status(r, o) for (_, r), o in zip(f.iterrows(), still_open)]
+    notes = []
+    for _, r in f.iterrows():
+        n = []
+        for ours, theirs, name in (("pvod_date", "fin_pvod", "PVOD"), ("est_date", "fin_est", "EST")):
+            a = pd.to_datetime(r[ours], errors="coerce")
+            b = pd.to_datetime(r[theirs], errors="coerce")
+            if pd.notna(b) and b.year < 2000:             # CHTT placeholder (e.g. 1899-12-30)
+                b = pd.NaT
+            if pd.notna(b) and (pd.isna(a) or a != b):
+                n.append(f"Finance {name} {b.date()} (ours {a.date() if pd.notna(a) else 'blank'})")
+        notes.append("; ".join(n))
+    f["date_note"] = notes
+    return f
+
+
+def recon_markdown(data: dict):
+    from IPython.display import Markdown
+
+    f = recon_frame(data)
+    if f.empty:
+        return Markdown("ℹ️ No titles to compare yet.")
+    done = f[f["status"].isin([RECON_OK, RECON_CHECK])]
+    counts = f["status"].value_counts()
+    ours, fin = done["ours"].sum(), done["finance"].sum()
+    pct = (ours - fin) / fin if fin else 0
+    rows = [
+        ("Titles compared (premium window over)", f"{len(done):,}"),
+        ("… ours (US + Canada royalty) / Finance (CHTT premium)", f"{_m(ours)} / {_m(fin)}  "
+                                                                    f"(**{pct:+.1%}**)"),
+        ("… median gap per title", f"{done['gap_pct'].median():+.1%}" if len(done) else "—"),
+        (f"… within range ({RECON_UNDER:.0%} to +{RECON_OVER:.0%})", f"{counts.get(RECON_OK, 0):,}"),
+        ("… ⚠️ to check (outside the range)", f"{counts.get(RECON_CHECK, 0):,}"),
+        ("Premium window still open (Finance is an estimate)", f"{counts.get(RECON_OPEN, 0):,}"),
+        ("No Finance figure in the CHTT", f"{counts.get(RECON_NO_FINANCE, 0):,}"),
+        ("Finance figure but no POS revenue linked", f"{counts.get(RECON_NO_POS, 0):,}"),
+        ("Finance PVOD or EST date differs from ours", f"{(f['date_note'] != '').sum():,}"),
+        ("… if we used Finance's EST dates: within range / to check",
+         f"{done['gap_pct_fin_dates'].between(RECON_UNDER, RECON_OVER).sum():,} / "
+         f"{(~done['gap_pct_fin_dates'].between(RECON_UNDER, RECON_OVER)).sum():,}"),
+    ]
+    table = "\n".join(f"| {a} | {b} |" for a, b in rows)
+    return Markdown(f"| | |\n|---|---|\n{table}")
+
+
+def chart_recon(data: dict):
+    """Ours vs Finance per title (log scales), with the agreed range drawn as a band."""
+    import plotly.graph_objects as go
+
+    f = recon_frame(data)
+    f = f[(f["ours"] > 0) & (f["finance"] > 0)].copy()
+    fig = go.Figure()
+    if not f.empty:
+        lo, hi = f[["ours", "finance"]].min().min() * 0.8, f[["ours", "finance"]].max().max() * 1.2
+        for k, name, dash in ((1, "Same as Finance", "solid"),
+                              (1 + RECON_UNDER, f"{RECON_UNDER:.0%}", "dot"),
+                              (1 + RECON_OVER, f"+{RECON_OVER:.0%}", "dot")):
+            fig.add_trace(go.Scatter(x=[lo, hi], y=[lo * k, hi * k], mode="lines", name=name,
+                                     line={"color": AXIS, "width": 1, "dash": dash},
+                                     hoverinfo="skip", showlegend=False))
+    hover = ("<b>%{customdata[0]}</b><br>PVOD %{customdata[1]} · EST %{customdata[2]}"
+             "<br><br>Ours: %{customdata[3]} (US %{customdata[4]} · Canada %{customdata[5]})"
+             "<br>Finance: %{customdata[6]}<br>Gap: %{customdata[7]}"
+             "<br>%{customdata[8]}<extra></extra>")
+    styles = ((RECON_OK, SERIES[0], "circle"), (RECON_CHECK, SERIES[1], "diamond"),
+              (RECON_OPEN, MUTED, "circle-open"))
+    for status, color, symbol in styles:
+        g = f[f["status"] == status]
+        if g.empty:
+            continue
+        cd = [[str(r["title_name"]).title(), str(r["pvod_date"])[:10], str(r["est_date"])[:10],
+               _m(r["ours"]), _m(r["us_premium"]), _m(r["can_premium"]), _m(r["finance"]),
+               f"{r['gap_pct']:+.1%}", r["date_note"]] for _, r in g.iterrows()]
+        fig.add_trace(go.Scatter(x=g["finance"], y=g["ours"], mode="markers",
+                                 name=f"{status} ({len(g)})", customdata=cd, hovertemplate=hover,
+                                 marker={"size": 10, "color": color, "symbol": symbol,
+                                         "line": {"width": 1, "color": SURFACE}}))
+    axis = {"type": "log", "gridcolor": GRID, "linecolor": AXIS, "zeroline": False,
+            "tickprefix": "$", "tickformat": "~s", "tickfont": {"color": INK_2, "size": 11}}
+    fig.update_layout(
+        title={"text": "<b>Premium revenue: ours (US + Canada royalty) vs Finance (CHTT)</b>",
+               "x": 0.01, "font": {"color": INK, "size": 15}},
+        xaxis={**axis, "title": {"text": "Finance premium revenue (log scale)"}},
+        yaxis={**axis, "title": {"text": "Ours (log scale)"}},
+        legend={"font": {"color": INK_2, "size": 11}},
+        plot_bgcolor=SURFACE, paper_bgcolor=SURFACE, width=1000, height=600,
+        margin={"l": 70, "r": 20, "t": 60, "b": 60},
+        hoverlabel={"bgcolor": "white", "font": {"color": INK, "size": 12}})
+    return fig
+
+
+def recon_table(data: dict):
+    from us_hment_mmm.display import styled
+
+    f = recon_frame(data)
+    if f.empty:
+        return recon_markdown(data)
+    order = {RECON_CHECK: 0, RECON_NO_POS: 1, RECON_OK: 2, RECON_OPEN: 3, RECON_NO_FINANCE: 4}
+    f["_o"] = f["status"].map(order)
+    f = f.sort_values(["_o", "gap_pct"])
+    cols = {"title_name": "Title", "status": "Status", "pvod_date": "PVOD", "est_date": "EST",
+            "us_premium": "Ours: US", "can_premium": "Ours: Canada", "ours": "Ours: total",
+            "finance": "Finance (CHTT)", "gap": "Gap", "gap_pct": "Gap %",
+            "ours_fin_dates": "Ours with Finance EST", "gap_pct_fin_dates": "Gap % with Finance EST",
+            "date_note": "Finance dates", "est_source": "Where our EST came from"}
+    out = f[list(cols)].rename(columns=cols)
+    for c in ("PVOD", "EST"):
+        out[c] = pd.to_datetime(out[c], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    for c in ("Gap %", "Gap % with Finance EST"):
+        out[c] = out[c].map(lambda v: f"{v:+.1%}" if pd.notna(v) else "")
+    return styled(out.reset_index(drop=True),
+                  money=["Ours: US", "Ours: Canada", "Ours: total", "Finance (CHTT)", "Gap",
+                         "Ours with Finance EST"])
