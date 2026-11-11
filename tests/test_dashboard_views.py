@@ -13,12 +13,17 @@ def test_media_rules():
     assert f"release_date >= DATE '{config.MMM_FIRST_RELEASE_DATE}'" in sql
 
 
-def test_comp_mix_has_every_channel_and_the_title_total():
+def test_comp_mix_leaves_unlabelled_spend_out_of_the_mix_and_warns():
     sql = V.comp_mix_sql()
-    for c in V.model_channels():
-        assert f"'{c}'" in sql
-    assert "title_total" in sql and "CROSS JOIN UNNEST" in sql
+    grid = sql[sql.index("UNNEST(["):sql.index("]) AS c")]
+    for c in V.model_channels()[:-1]:
+        assert f"'{c}'" in grid
+    assert "'No channel yet'" not in grid                          # not a row in the mix
     assert V.model_channels()[-1] == "No channel yet" and "Linear" in V.model_channels()
+    for col in ("title_total", "labelled_total", "no_channel_spend", "no_channel_share",
+                "channel_check"):
+        assert col in sql
+    assert "has no channel yet" in sql and "All Home Ent media has a channel" in sql
 
 
 def test_names():

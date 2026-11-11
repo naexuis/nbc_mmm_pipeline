@@ -13,8 +13,11 @@ Views
   dash_title         one row per title: dates, distributor, In MMM, media, premium revenue
   dash_media_daily   title x day x model channel x source: Home Ent media spend
   dash_revenue_daily title x day: premium revenue (US royalty), with days since PVOD
-  dash_comp_mix      title x model channel (every channel, $0 included): spend and the
-                     title's total, so share = SUM(spend) / SUM(title_total) for any set of comps
+  dash_comp_mix      title x model channel (every labelled channel, $0 included): spend, the
+                     title's total and its labelled total (spend with a channel), so for any
+                     set of comps share = SUM(spend) / (SUM(labelled_total) / channels shown).
+                     "No channel yet" is left out of the mix; no_channel_spend and
+                     channel_check (a line for every film) say how much is still unlabelled.
 
 Usage (from /mnt/UniversalPicturesMMM):
     python -m us_hment_mmm.dashboard.views            # check only: BigQuery validates the SQL
@@ -109,17 +112,28 @@ WHERE m.imdb_id IS NOT NULL OR r.imdb_id IS NOT NULL"""
 
 
 def comp_mix_sql() -> str:
-    channels = ", ".join(f"'{c}'" for c in model_channels())
+    none = config.MODEL_CHANNEL_NONE
+    channels = ", ".join(f"'{c}'" for c in model_channels() if c != none)
     return f"""
 WITH s AS (SELECT imdb_id, title, distributor, release_date, model_channel,
                   SUM(media_spend) AS spend
            FROM ({media_daily_sql()}) GROUP BY 1, 2, 3, 4, 5),
 films AS (SELECT imdb_id, ANY_VALUE(title) AS title, ANY_VALUE(distributor) AS distributor,
-                 ANY_VALUE(release_date) AS release_date, SUM(spend) AS title_total
+                 ANY_VALUE(release_date) AS release_date, SUM(spend) AS title_total,
+                 SUM(IF(model_channel = '{none}', spend, 0)) AS no_channel_spend
           FROM s GROUP BY 1),
 grid AS (SELECT f.*, c AS model_channel FROM films f CROSS JOIN UNNEST([{channels}]) AS c)
 SELECT g.imdb_id, g.title, g.distributor, g.release_date, g.model_channel,
-       IFNULL(s.spend, 0) AS spend, g.title_total
+       IFNULL(s.spend, 0) AS spend, g.title_total,
+       g.title_total - g.no_channel_spend AS labelled_total,
+       g.no_channel_spend,
+       SAFE_DIVIDE(g.no_channel_spend, g.title_total) AS no_channel_share,
+       IF(g.no_channel_spend > 0,
+          FORMAT("$%'d of $%'d (%d%%) has no channel yet; the mix uses only its labelled spend",
+                 CAST(ROUND(g.no_channel_spend) AS INT64),
+                 CAST(ROUND(g.title_total) AS INT64),
+                 CAST(ROUND(100 * SAFE_DIVIDE(g.no_channel_spend, g.title_total)) AS INT64)),
+          "All Home Ent media has a channel") AS channel_check
 FROM grid g LEFT JOIN s USING (imdb_id, model_channel)"""
 
 
