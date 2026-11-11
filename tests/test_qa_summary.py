@@ -162,6 +162,7 @@ def test_chtt_reconciliation():
     data = Q.load(FakeClient())
     f = Q.recon_frame(data).set_index("imdb_id")
     assert f.loc["tt1", "ours"] == 880 and f.loc["tt1", "status"] == Q.RECON_OK      # -12%
+    assert "No US premium window" not in f.loc["tt1", "date_note"]
     assert f.loc["tt3", "status"] == Q.RECON_CHECK                                   # -50%
     assert "Finance PVOD 2024-07-08" in f.loc["tt3", "date_note"]
     assert f.loc["tt4", "status"] == Q.RECON_OPEN                     # EST after the last sale

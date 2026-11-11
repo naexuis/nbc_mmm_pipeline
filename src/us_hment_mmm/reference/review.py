@@ -48,10 +48,13 @@ GENRE_FIELDS = ("nbc_genre_1", "nbc_genre_2")
 GENRE_LABELS = {"nbc_genre_1": "NBC genre 1", "nbc_genre_2": "NBC genre 2"}
 SETTABLE_FIELDS = ("title_name", "distributor", "release_date", "pvod_date", "est_date",
                    "nbc_genre_1", "nbc_genre_2", "imdb_genres",
-                   "in_mmm", "review_note")
+                   "in_mmm", "us_premium_window", "review_note")
 FIELD_LABELS = {"release_date": "Release", "pvod_date": "PVOD", "est_date": "EST"}
 SECTION_NAMES = {1: "Product code", 2: "Review note", 3: "Date", 4: "Product ID",
-                 5: "NBC genre", 6: "Distributor", 7: "IMDb genres"}
+                 5: "NBC genre", 6: "Distributor", 7: "IMDb genres", 8: "US premium"}
+# A film went to Peacock within this many days of its theatrical release = day-and-date, so it
+# probably had no US premium window (premium only in Canada). Proposed, never applied alone.
+DAY_AND_DATE_DAYS = 7
 IMDB_GENRE_FILE = "universal_genre_mapping.json"     # in reference_seed/ (IMDb website genres)
 IMDB_WEBSITE_SOURCE = "IMDb website (genre file)"
 IMDB_BASICS_PATTERN = "imdb_genres_title_basics_*.csv"   # from the Amazon MMT Pipeline
@@ -351,6 +354,34 @@ def distributor_differences(titles: dict, enrichment: dict) -> list[dict]:
     return out
 
 
+def us_premium_differences(titles: dict, chtt: dict) -> list[dict]:
+    """
+    Films released since config.MMM_FIRST_RELEASE_DATE that went to Peacock within
+    DAY_AND_DATE_DAYS of their theatrical release (Finance's CHTT): they probably had no US
+    premium window. Proposed as 'no'; films already set (yes or no) are not asked again.
+    """
+    out = []
+    first = config.MMM_FIRST_RELEASE_DATE
+    for imdb, t in titles.items():
+        if t.get("us_premium_window") is not None:
+            continue
+        c = chtt.get(imdb) or {}
+        theatrical = c.get("theatrical_date") or parse_date(t.get("release_date"))
+        svod, provider = c.get("svod_date"), (c.get("svod_provider") or "")
+        if not (theatrical and svod and theatrical >= first and "PEACOCK" in provider.upper()):
+            continue
+        gap = (date.fromisoformat(svod) - date.fromisoformat(theatrical)).days
+        if gap <= DAY_AND_DATE_DAYS:
+            out.append({"imdb_id": imdb, "title_name": t["title_name"], "in_mmm": t.get("in_mmm"),
+                        "theatrical": theatrical, "svod": svod, "provider": provider,
+                        "pvod": parse_date(t.get("pvod_date")),
+                        "why": (f"On {provider} {gap} day(s) after theatrical release "
+                                "(day-and-date): no US premium window")})
+    order = {True: 0, None: 1, False: 2}
+    out.sort(key=lambda d: (order[d["in_mmm"]], d["title_name"]))
+    return out
+
+
 def genre_list(value) -> str | None:
     """'drama,  Comedy;sci-fi' -> 'Comedy, Drama, Sci-Fi' (sorted, one spelling per genre)."""
     parts = [p.strip() for p in re.split(r"[,;|]", text(value)) if p.strip()]
@@ -443,7 +474,8 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
                 pids: list[dict], rejected: set[tuple[str, str]] = frozenset(),
                 genres: list[dict] = (), amazon: dict | None = None,
                 distributors: list[dict] = (), imdb_genres: list[dict] = (),
-                missing_weeks: set[str] = frozenset()) -> list[dict]:
+                missing_weeks: set[str] = frozenset(),
+                us_premium: list[dict] = ()) -> list[dict]:
     """
     The review list. Each item has a stable key, a 'current' and 'suggested' value (used to
     spot items that changed after a workbook was issued), 'show' (the columns its workbook
@@ -538,6 +570,13 @@ def build_items(codes: list[dict], titles: dict, enrichment: dict, dates: list[d
             {"label": d["title_name"], "film": d["title_name"], "imdb_id": d["imdb_id"],
              "in_mmm": in_mmm_text[d["in_mmm"]], "now": d["current"] or "(none)",
              "proposed": d["new"]})
+    for d in us_premium:
+        add(8, f"uspremium|{d['imdb_id']}", "yes", "no", d["why"],
+            {"imdb_id": d["imdb_id"], "field": "us_premium_window", "value": "no"},
+            {"label": d["title_name"], "film": d["title_name"], "imdb_id": d["imdb_id"],
+             "in_mmm": in_mmm_text[d["in_mmm"]], "theatrical": d["theatrical"],
+             "svod": f"{d['provider']} {d['svod']}", "pvod": d["pvod"] or "(none)",
+             "proposed": "no", "why": d["why"]})
     return items
 
 
@@ -645,10 +684,11 @@ class Plan:
                 self.problem(f"{imdb} {field} '{text(value)}' is not a date like 2026-06-30")
                 return
             value = parsed
-        elif field == "in_mmm":
+        elif field in ("in_mmm", "us_premium_window"):
             value = parse_bool(value)
             if value is None:
-                self.problem(f"In MMM for {imdb} must be yes or no")
+                label = "In MMM" if field == "in_mmm" else "US premium window"
+                self.problem(f"{label} for {imdb} must be yes or no")
                 return
         else:
             value = text(value) or None
@@ -762,7 +802,7 @@ class Plan:
         elif section == 7:
             self.genre_source = t["source"] if decision == "approve" else HAND_SOURCE
             self.set_value(t["imdb_id"], "imdb_genres", value)
-        elif section in (3, 5, 6):
+        elif section in (3, 5, 6, 8):
             self.set_value(t["imdb_id"], t["field"], value)
         else:
             self.map_pid(t["product_id"], value, t["label"])
@@ -913,12 +953,16 @@ def _read_chtt(client, ids):
     t = config.REFERENCE_SOURCES["std_chtt"]["table"]
     sql = f"""
         SELECT imdb_id, ANY_VALUE(premium_release_date) AS pvod_date,
-               ANY_VALUE(est_release_date) AS est_date
+               ANY_VALUE(est_release_date) AS est_date,
+               ANY_VALUE(theatrical_release_date) AS theatrical_date,
+               ANY_VALUE(svod_release_date) AS svod_date, ANY_VALUE(svod_provider) AS svod_provider
         FROM `{_raw(t)}` WHERE {_latest(t)} AND imdb_id IN UNNEST(@ids) GROUP BY imdb_id
     """
     out = {}
     for r in _rows(client, sql, [bigquery.ArrayQueryParameter("ids", "STRING", sorted(ids))]):
-        out[r["imdb_id"]] = {f: parse_date(r[f]) for f in ("pvod_date", "est_date")}
+        out[r["imdb_id"]] = {f: parse_date(r.get(f))
+                             for f in ("pvod_date", "est_date", "theatrical_date", "svod_date")}
+        out[r["imdb_id"]]["svod_provider"] = text(r.get("svod_provider")) or None
     return out
 
 
@@ -1086,6 +1130,9 @@ def _read_untagged_pids(client, titles, aliases):
 def gather(client=None) -> dict:
     """Read everything the review needs and build the list."""
     client = client or bq_client()
+    from us_hment_mmm.reference.titles import ensure_title_columns
+
+    ensure_title_columns(client)          # adds us_premium_window if the table predates it
     titles, aliases = _read_tables(client)
     codes = _read_unmapped_codes(client, aliases)
     tags = {t for c in codes for t in c["tags"]}
@@ -1099,7 +1146,8 @@ def gather(client=None) -> dict:
                         genres=genre_differences(titles, enrichment), amazon=amazon,
                         missing_weeks=missing,
                         distributors=distributor_differences(titles, enrichment),
-                        imdb_genres=imdb_genre_differences(titles, _imdb_genre_proposals()))
+                        imdb_genres=imdb_genre_differences(titles, _imdb_genre_proposals()),
+                        us_premium=us_premium_differences(titles, chtt))
     return {"titles": titles, "aliases": aliases, "enrichment": enrichment, "chtt": chtt,
             "items": items, "amazon_note": amazon_note}
 
@@ -1290,7 +1338,8 @@ def status_markdown(result: dict):
     c = result["counts"]
     counts = (f"On the review list now: **{c[1]}** product codes, **{c[2]}** review notes, "
               f"**{c[3]}** dates, **{c[4]}** product IDs, **{c.get(5, 0)}** NBC genres, "
-              f"**{c.get(6, 0)}** distributors, **{c.get(7, 0)}** IMDb genre lists.")
+              f"**{c.get(6, 0)}** distributors, **{c.get(7, 0)}** IMDb genre lists, "
+              f"**{c.get(8, 0)}** US premium windows.")
     if result.get("amazon_note"):
         counts += f"  \nℹ️ {result['amazon_note']}"
     n, status, name = len(result["changes"]), result["status"], result["workbook"]
@@ -1319,7 +1368,7 @@ def status_markdown(result: dict):
                 "Click the file name to download it.\n\n"
                 "**What to do in Excel:** work through the numbered tabs (1 · Product codes, "
                 "2 · Flagged films, 3 · Dates, 4 · Revenue product IDs, 5 · NBC genre, "
-                "6 · Distributor, 7 · IMDb genres). Each tab "
+                "6 · Distributor, 7 · IMDb genres, 8 · US premium). Each tab "
                 "starts with a "
                 "blue box that says what the problem is and what each choice does. Fill in only "
                 "the yellow columns, with a **Reason** for every row you decide. Save it as .xlsx "

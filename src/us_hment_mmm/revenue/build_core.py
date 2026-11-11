@@ -7,6 +7,7 @@ Build the core revenue tables (us_hment_mmm_core) from the newest raw US revenue
                            premium       PVOD date up to the day before the EST date
                            after_est     on or after the EST date
                            no_pvod_date  the film has no PVOD date yet
+                           no_us_premium the film had no US premium window (title flag)
   revenue_premium_daily  view: royalty and units per film per day in the premium window
                          (PVOD to EST - 1). Pre-sales are added to the PVOD day. This is
                          the revenue the MMM uses.
@@ -76,6 +77,7 @@ CLUSTER BY imdb_id AS
 WITH {_sources_cte()}
 SELECT l.imdb_id, s.transaction_date, s.retailer,
        CASE WHEN t.pvod_date IS NULL THEN 'no_pvod_date'
+            WHEN t.us_premium_window IS FALSE THEN 'no_us_premium'
             WHEN s.transaction_date < t.pvod_date THEN 'before_pvod'
             WHEN t.est_date IS NULL OR s.transaction_date < t.est_date THEN 'premium'
             ELSE 'after_est' END AS revenue_window,
@@ -122,11 +124,15 @@ by_film AS (
   SELECT l.imdb_id,
          SUM(s.royalty_usd) AS royalty,
          SUM(IF(t.pvod_date IS NULL, s.royalty_usd, 0)) AS no_pvod,
-         SUM(IF(s.transaction_date < t.pvod_date, s.royalty_usd, 0)) AS before_pvod,
-         SUM(IF(s.transaction_date >= t.pvod_date
+         SUM(IF(t.pvod_date IS NOT NULL AND t.us_premium_window IS FALSE, s.royalty_usd, 0))
+           AS no_us_premium,
+         SUM(IF(t.us_premium_window IS NOT FALSE AND s.transaction_date < t.pvod_date,
+                s.royalty_usd, 0)) AS before_pvod,
+         SUM(IF(t.us_premium_window IS NOT FALSE AND s.transaction_date >= t.pvod_date
                 AND (t.est_date IS NULL OR s.transaction_date < t.est_date), s.royalty_usd, 0)) AS premium,
-         SUM(IF(s.transaction_date >= t.pvod_date AND s.transaction_date >= t.est_date,
-                s.royalty_usd, 0)) AS after_est,
+         SUM(IF(t.us_premium_window IS NOT FALSE AND s.transaction_date >= t.pvod_date
+                AND s.transaction_date >= t.est_date, s.royalty_usd, 0)) AS after_est,
+         ANY_VALUE(t.pvod_date IS NOT NULL AND t.us_premium_window IS FALSE) AS has_no_us_premium,
          ANY_VALUE(t.pvod_date IS NULL) AS has_no_pvod,
          ANY_VALUE(t.in_mmm) AS in_mmm,
          ANY_VALUE(t.release_date) AS release_date
@@ -142,6 +148,8 @@ SELECT
   (SELECT SUM(before_pvod) FROM by_film) AS before_pvod_royalty,
   (SELECT SUM(premium) FROM by_film) AS premium_royalty,
   (SELECT SUM(after_est) FROM by_film) AS after_est_royalty,
+  (SELECT SUM(no_us_premium) FROM by_film) AS no_us_premium_royalty,
+  (SELECT COUNTIF(has_no_us_premium) FROM by_film) AS films_no_us_premium,
   (SELECT COUNT(*) FROM by_film) AS films_with_revenue,
   (SELECT COUNT(*) FROM films) AS films_with_ids,
   (SELECT COUNTIF(has_no_pvod) FROM by_film) AS films_no_pvod,
@@ -193,6 +201,10 @@ def _close(a, b) -> bool:
 
 def _notes(s) -> list[str]:
     notes = []
+    if getattr(s, "films_no_us_premium", 0):
+        notes.append(f"{s.films_no_us_premium} film(s) had no US premium window (set in "
+                     f"05_Review_Titles): their US revenue ({_money(s.no_us_premium_royalty)}) is "
+                     "kept in the table but is never premium revenue.")
     if s.films_no_pvod:
         notes.append(f"{s.films_no_pvod} film(s) have revenue but no PVOD date. Their revenue is "
                      "kept in the table but not used by the MMM until a date is added in "
@@ -227,6 +239,7 @@ def sections(s) -> dict:
         ("  ↳ premium window (PVOD to EST − 1)", s.premium_royalty),
         ("  ↳ on or after EST", s.after_est_royalty),
         ("  ↳ film has no PVOD date", s.no_pvod_royalty),
+        ("  ↳ film had no US premium window", getattr(s, "no_us_premium_royalty", 0) or 0),
         ("Used by the MMM (pre-sales + premium)", used),
     ]
     return {
@@ -251,6 +264,9 @@ def report(s) -> list[str]:
 def run(dry_run: bool = True, client=None) -> dict:
     """Check (and with dry_run=False, build). Returns lines to show and the outcome."""
     client = client or bq_client()
+    from us_hment_mmm.reference.titles import ensure_title_columns
+
+    ensure_title_columns(client)          # adds us_premium_window if the table predates it
     s = summary(client)
     lines = report(s)
     sec = sections(s)

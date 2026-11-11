@@ -527,6 +527,7 @@ def chtt_sql() -> str:
           GROUP BY 1),
         last_sale AS (SELECT MAX(transaction_date) AS d FROM `{_core(config.REVENUE_CORE_TABLE)}`)
         SELECT t.imdb_id, t.title_name, t.release_date, t.distributor, t.in_mmm,
+               t.us_premium_window,
                t.pvod_date, t.est_date, us.us_premium, can_film.can_premium, fin.finance,
                fin.fin_pvod, fin.fin_est, (SELECT d FROM last_sale) AS last_sale,
                us_fin.us_fin_dates, can_fin.can_fin_dates,
@@ -581,6 +582,8 @@ def recon_frame(data: dict) -> pd.DataFrame:
                 b = pd.NaT
             if pd.notna(b) and (pd.isna(a) or a != b):
                 n.append(f"Finance {name} {b.date()} (ours {a.date() if pd.notna(a) else 'blank'})")
+        if r.get("us_premium_window") is False:
+            n.insert(0, "No US premium window: ours is Canada only")
         notes.append("; ".join(n))
     f["date_note"] = notes
     return f

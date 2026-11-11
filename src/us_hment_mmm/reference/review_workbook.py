@@ -9,6 +9,8 @@ do, then the column headers (row 2), then the rows (row 3 on).
   2 · Flagged films       films flagged when the title table was built
   3 · Dates               NBC or Finance dates that differ from the current date
   4 · Revenue product IDs product IDs NBC tags with a film but not linked yet
+  5-7                     NBC genre, distributor, IMDb genres
+  8 · US premium          films that probably had no US premium window
   Add films, Change films, Map codes, Map product IDs   changes typed by hand
   Films now               the title table today (reference only, never read back)
 """
@@ -112,6 +114,17 @@ REVIEW_TABS = {
          ("From", "source", 26), ("Decision", "decision", 15),
          ("Your answer (genres)", "answer", 30), ("Reason", "reason", 40)],
         CHOICES),
+    8: ("8 · US premium",
+        "These films went to Peacock (or another service) within a week of their theatrical "
+        "release, so they probably had no US premium window (premium only in Canada). Accept "
+        "marks the film 'no US premium window': its US sales are then never counted as premium "
+        "revenue. Keep as is leaves it as a normal premium title (you will not be asked again). "
+        "Use my answer lets you type yes or no.",
+        [("Film", "film", 34), ("IMDb ID", "imdb_id", 13), ("In MMM", "in_mmm", 12),
+         ("Theatrical", "theatrical", 12), ("Streaming (CHTT)", "svod", 22), ("PVOD", "pvod", 12),
+         ("Why", "why", 46), ("Decision", "decision", 15),
+         ("Your answer (yes / no)", "answer", 18), ("Reason", "reason", 40)],
+        CHOICES),
 }
 INPUT_FIELDS = {"decision", "answer", "reason"}
 
@@ -126,8 +139,8 @@ HAND_TABS = {
                    ("Reason", "reason", 40)]),
     "Change films": ("change_films",
                      "Change one value of a film already in the title table. Field is one of: "
-                     + ", ".join(R.SETTABLE_FIELDS) + ". in_mmm takes yes or no (the Reason "
-                     "becomes the In MMM reason). Leave New value empty to clear review_note.",
+                     + ", ".join(R.SETTABLE_FIELDS) + ". in_mmm and us_premium_window take yes or no "
+                     "(for in_mmm the Reason becomes the In MMM reason). Leave New value empty to clear review_note.",
                      [("Film (IMDb ID)", "film", 16), ("Field", "field", 16),
                       ("New value", "new_value", 30), ("Reason", "reason", 40)]),
     "Map codes": ("map_codes",
@@ -173,6 +186,7 @@ READ_ME = [
     "  5 · NBC genre            NBC master genres that differ from the film's genre",
     "  6 · Distributor          distributors to put in their standard spelling",
     "  7 · IMDb genres          IMDb genre lists to add or update",
+    "  8 · US premium           films with no US premium window (day-and-date on Peacock)",
     "  Add films / Change films / Map codes / Map product IDs   fixes you type by hand",
     "  Films now                the current film list, to look up IMDb IDs (not read back)",
     "",

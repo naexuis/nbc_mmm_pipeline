@@ -737,3 +737,48 @@ def test_kept_bundle_does_not_come_back():
     assert len(R.build_items([], NEW_TITLES, {}, [], found)) == 1
     again = R.build_items([], NEW_TITLES, {}, [], found, {("pid|1205728", R.NO_SUGGESTION)})
     assert again == []
+
+
+# --- US premium window ------------------------------------------------------------------
+
+def test_day_and_date_on_peacock_is_proposed_as_no_us_premium():
+    titles = {
+        "tt1": {"title_name": "FIVE NIGHTS AT FREDDYS", "release_date": "2023-10-27",
+                "pvod_date": "2023-11-14", "in_mmm": None},
+        "tt2": {"title_name": "NORMAL FILM", "release_date": "2024-01-05",
+                "pvod_date": "2024-01-23", "in_mmm": True},
+        "tt3": {"title_name": "ALREADY SET", "release_date": "2024-01-05", "in_mmm": None,
+                "us_premium_window": True},
+        "tt4": {"title_name": "OLD FILM", "release_date": "2022-10-14", "in_mmm": False},
+    }
+    chtt = {"tt1": {"theatrical_date": "2023-10-27", "svod_date": "2023-10-27",
+                    "svod_provider": "Peacock"},
+            "tt2": {"theatrical_date": "2024-01-05", "svod_date": "2024-05-03",
+                    "svod_provider": "Peacock"},
+            "tt3": {"theatrical_date": "2024-01-05", "svod_date": "2024-01-05",
+                    "svod_provider": "Peacock"},
+            "tt4": {"theatrical_date": "2022-10-14", "svod_date": "2022-10-14",
+                    "svod_provider": "Peacock"}}
+    found = R.us_premium_differences(titles, chtt)
+    assert [d["imdb_id"] for d in found] == ["tt1"]
+    items = R.build_items([], titles, {}, [], [], us_premium=found)
+    item = items[0]
+    assert item["section"] == 8 and item["target"] == {"imdb_id": "tt1",
+                                                      "field": "us_premium_window", "value": "no"}
+    assert R.build_items([], titles, {}, [], [], {("uspremium|tt1", "no")}, us_premium=found) == []
+
+
+def test_us_premium_window_is_settable_yes_or_no():
+    assert "us_premium_window" in R.SETTABLE_FIELDS
+
+
+def test_accepting_a_us_premium_row_sets_the_flag():
+    titles = {"tt1": {"imdb_id": "tt1", "title_name": "FIVE NIGHTS AT FREDDYS",
+                      "release_date": "2023-10-27", "in_mmm": None}}
+    chtt = {"tt1": {"theatrical_date": "2023-10-27", "svod_date": "2023-10-27",
+                    "svod_provider": "Peacock"}}
+    item = R.build_items([], titles, {}, [], [], us_premium=R.us_premium_differences(titles, chtt))[0]
+    plan = R.Plan(titles, {}, {})
+    plan.decide(item, "approve", None)
+    assert not plan.problems
+    assert {(c["key"], c["field"]): c["new"] for c in plan.changes}[("tt1", "us_premium_window")] is False

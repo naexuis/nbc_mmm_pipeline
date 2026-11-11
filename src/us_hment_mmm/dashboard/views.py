@@ -55,7 +55,8 @@ def _titles_sql() -> str:
     return f"""
       SELECT imdb_id, INITCAP(title_name) AS title, title_name, release_date, pvod_date, est_date,
              INITCAP(distributor) AS distributor,
-             CASE in_mmm WHEN TRUE THEN 'Yes' WHEN FALSE THEN 'No' ELSE 'Not reviewed' END AS in_mmm
+             CASE in_mmm WHEN TRUE THEN 'Yes' WHEN FALSE THEN 'No' ELSE 'Not reviewed' END AS in_mmm,
+             IF(us_premium_window IS FALSE, 'No', 'Yes') AS us_premium_window
       FROM `{_core(config.TITLE_TABLE)}`
       WHERE release_date >= DATE '{config.MMM_FIRST_RELEASE_DATE}'"""
 
@@ -98,7 +99,7 @@ m AS (SELECT imdb_id, SUM(media_spend) AS media_spend,
       FROM ({media_daily_sql()}) GROUP BY 1),
 r AS (SELECT imdb_id, SUM(premium_revenue) AS premium_revenue FROM ({revenue_daily_sql()}) GROUP BY 1)
 SELECT t.imdb_id, t.title, t.distributor, t.release_date, t.pvod_date, t.est_date, t.in_mmm,
-       EXTRACT(YEAR FROM t.release_date) AS release_year,
+       t.us_premium_window, EXTRACT(YEAR FROM t.release_date) AS release_year,
        IFNULL(m.media_spend, 0) AS media_spend, IFNULL(m.no_channel_spend, 0) AS no_channel_spend,
        IFNULL(r.premium_revenue, 0) AS premium_revenue,
        SAFE_DIVIDE(r.premium_revenue, m.media_spend) AS revenue_per_media_dollar,

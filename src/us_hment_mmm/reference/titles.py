@@ -49,6 +49,9 @@ TITLE_SCHEMA = [
     bigquery.SchemaField("imdb_genres_source", "STRING"),  # where imdb_genres came from
     bigquery.SchemaField("in_mmm", "BOOL"),
     bigquery.SchemaField("in_mmm_reason", "STRING"),
+    # FALSE = the film had no US premium window (e.g. day-and-date in theaters and on Peacock,
+    # premium only in Canada); its US sales are then never premium revenue. NULL = yes.
+    bigquery.SchemaField("us_premium_window", "BOOL"),
     bigquery.SchemaField("review_note", "STRING"),
     bigquery.SchemaField("updated_at", "TIMESTAMP"),
     bigquery.SchemaField("updated_by", "STRING"),
@@ -246,6 +249,12 @@ def _table_has_rows(client: bigquery.Client, name: str) -> bool:
     except NotFound:
         return False
     return (t.num_rows or 0) > 0
+
+
+def ensure_title_columns(client) -> None:
+    """Add title columns introduced after the table was created (nullable, so nothing changes)."""
+    client.query(f"ALTER TABLE `{config.table_id(config.DATASET_CORE, config.TITLE_TABLE)}` "
+                 "ADD COLUMN IF NOT EXISTS us_premium_window BOOL").result()
 
 
 def _write(client: bigquery.Client, name: str, schema, rows: list[dict]) -> None:

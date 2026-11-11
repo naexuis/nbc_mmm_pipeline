@@ -46,7 +46,17 @@ def test_report_notes_missing_dates_and_shared_ids():
 
 
 def test_after_est_does_not_count_films_without_pvod():
-    assert "s.transaction_date >= t.pvod_date AND s.transaction_date >= t.est_date" in b.summary_sql()
+    sql = " ".join(b.summary_sql().split())
+    assert "s.transaction_date >= t.pvod_date AND s.transaction_date >= t.est_date" in sql
+
+
+def test_no_us_premium_window_is_never_premium():
+    table = " ".join(b.table_sql().split()) if hasattr(b, "table_sql") else ""
+    summary = " ".join(b.summary_sql().split())
+    assert "t.us_premium_window IS NOT FALSE AND s.transaction_date < t.pvod_date" in summary
+    assert "AS no_us_premium_royalty" in summary
+    if table:
+        assert "WHEN t.us_premium_window IS FALSE THEN 'no_us_premium'" in table
 
 
 class _Client:
@@ -54,6 +64,9 @@ class _Client:
         self.rows, self.sql = rows, []
 
     def query(self, sql):
+        if sql.startswith("ALTER TABLE"):                 # ensure_title_columns
+            self.altered = sql
+            return SimpleNamespace(result=lambda: [])
         self.sql.append(sql)
         rows = self.rows.pop(0) if self.rows else []
         return SimpleNamespace(result=lambda: rows)
@@ -63,6 +76,7 @@ def test_run_check_only_writes_nothing():
     c = _Client([[_summary()]])
     r = b.run(dry_run=True, client=c)
     assert r["status"] == "CHECKED" and len(c.sql) == 1
+    assert "ADD COLUMN IF NOT EXISTS us_premium_window BOOL" in c.altered
 
 
 def test_run_refuses_to_write_shared_ids():

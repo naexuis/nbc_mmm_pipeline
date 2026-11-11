@@ -28,7 +28,7 @@ TEXT_FIELDS = ("title_name", "distributor", "nbc_genre_1", "nbc_genre_2", "imdb_
 DATE_FIELDS = ("release_date", "pvod_date", "est_date")
 COMPARE_FIELDS = ("title_name", "distributor", *DATE_FIELDS, "nbc_genre_1", "nbc_genre_2",
                   "imdb_genres", "imdb_genres_source",
-                  "in_mmm", "in_mmm_reason", "review_note")
+                  "in_mmm", "in_mmm_reason", "us_premium_window", "review_note")
 
 
 def _core(name: str) -> str:
@@ -45,7 +45,10 @@ def as_of_sql() -> str:
                                              "imdb_genres_source")]
             + [f"CASE LOWER({pick('in_mmm')}) WHEN 'true' THEN TRUE WHEN 'false' THEN FALSE "
                f"END AS in_mmm"]
-            + [f"{pick(f)} AS {f}" for f in ("in_mmm_reason", "review_note")])
+            + [f"{pick('in_mmm_reason')} AS in_mmm_reason"]
+            + [f"CASE LOWER({pick('us_premium_window')}) WHEN 'true' THEN TRUE "
+               f"WHEN 'false' THEN FALSE END AS us_premium_window"]
+            + [f"{pick('review_note')} AS review_note"])
     body = ",\n           ".join(cols)
     return f"""
 CREATE OR REPLACE TABLE FUNCTION `{_core(AS_OF_FUNCTION)}`(as_of TIMESTAMP) AS
