@@ -27,7 +27,8 @@ def test_comp_mix_leaves_unlabelled_spend_out_of_the_mix_and_warns():
 
 
 def test_names():
-    assert set(V.VIEWS) == {"title", "media_daily", "revenue_daily", "comp_mix", "recon"}
+    assert set(V.VIEWS) == {"title", "media_daily", "revenue_daily", "comp_mix", "recon",
+                            "media_bridge"}
     assert V.view_name("title").endswith(".dash_title")
 
 
@@ -58,3 +59,16 @@ def test_revenue_sources_uses_the_same_window_as_ours():
     assert set(V.TABLES) == {"revenue_sources"}
     assert "AS std_chtt" in sql and "dash_recon" in sql
     assert "dash_recon" in V.revenue_sources_check_sql()
+
+
+def test_media_bridge_steps_match_the_media_rules():
+    sql = V.media_bridge_sql()
+    media = V.media_daily_sql()
+    for step, _ in V.MEDIA_STEPS:
+        assert f"'{step}'" in sql
+    # MMM media uses the same rules as dash_media_daily
+    assert "d.media_owner = 'home_ent'" in media and "m.media_owner != 'home_ent'" in sql
+    assert "spend_status = 'actual'" in media and "m.spend_status != 'actual'" in sql
+    assert f"m.channel_parent = '{config.CHANNEL_REMOVED}'" in sql
+    assert "m.model_channel IS NULL" in sql and "model_channel IS NOT NULL" in media
+    assert "dash_media_daily" in V.media_bridge_check_sql()

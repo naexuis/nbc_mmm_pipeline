@@ -20,6 +20,8 @@ Views
                      channel_check (a line for every film) say how much is still unlabelled.
   dash_recon         title: ours (US + Canada premium royalty) vs Finance's CHTT premium revenue,
                      gap, status and date notes; same query and rules as QA 08 Step 9
+  dash_media_bridge  film x step x source x client x channel: every dollar of media booked
+                     against the film and why it is (or is not) MMM media
   dash_revenue_sources  TABLE (it reads the raw revenue tables, so it is saved, not a view):
                      film x country x data source x product ID x product name, royalty in the
                      same window and links as Ours, so US + Canada = Ours for every film;
@@ -240,6 +242,56 @@ SELECT b.*, r.finance AS std_chtt     -- the film's CHTT figure, the same on eve
 FROM b LEFT JOIN (SELECT imdb_id, finance FROM `{view_name('recon')}`) r USING (imdb_id)"""
 
 
+MEDIA_STEPS = [            # (step, order): every dollar booked against a film lands in exactly one
+    ("Theatrical media (not Home Ent)", 1),
+    ("Removed in the channel review", 2),
+    ("Fees", 3),
+    ("Scheduled, not yet run", 4),
+    ("MMM media", 5),
+]
+
+
+def media_bridge_sql() -> str:
+    """Media bridge, one row per film x step x source x client x channel: every dollar of core
+    media linked to a film (2023+), and the step that keeps it out of the MMM (or 'MMM media').
+    'MMM media' is exactly the spend in dash_media_daily."""
+    order = " ".join(f"WHEN '{n}' THEN {o}" for n, o in MEDIA_STEPS)
+    return f"""
+WITH t AS ({_titles_sql()}),
+m AS (
+  SELECT d.imdb_id, d.media_source AS source, d.business_code AS client, d.media_owner,
+         d.channel_parent, d.spend_status, d.spend_usd,
+         {_channel_sql('d.channel_parent')} AS model_channel
+  FROM `{_core(config.MEDIA_DAILY_VIEW)}` d
+  WHERE d.link = 'film'),
+s AS (
+  SELECT m.*, CASE
+           WHEN m.media_owner != '{config.HOME_ENT_OWNER}' THEN '{MEDIA_STEPS[0][0]}'
+           WHEN m.channel_parent = '{config.CHANNEL_REMOVED}' THEN '{MEDIA_STEPS[1][0]}'
+           WHEN m.model_channel IS NULL THEN '{MEDIA_STEPS[2][0]}'
+           WHEN m.spend_status != 'actual' THEN '{MEDIA_STEPS[3][0]}'
+           ELSE '{MEDIA_STEPS[4][0]}' END AS step
+  FROM m)
+SELECT t.imdb_id, t.title, t.distributor, t.release_date, t.pvod_date, t.est_date,
+       s.step, CASE s.step {order} END AS step_order,
+       IF(s.step = '{MEDIA_STEPS[4][0]}', 'Yes', 'No') AS in_mmm_media,
+       s.source, s.client, s.media_owner,
+       IFNULL(s.model_channel, INITCAP(s.channel_parent)) AS channel,
+       SUM(s.spend_usd) AS spend
+FROM s JOIN t USING (imdb_id)
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13"""
+
+
+def media_bridge_check_sql() -> str:
+    """Films where 'MMM media' in dash_media_bridge differs from dash_media_daily by > $1."""
+    return f"""
+SELECT COUNT(*) AS films, COUNTIF(ABS(IFNULL(b.mmm, 0) - IFNULL(d.media, 0)) > 1) AS differ
+FROM (SELECT imdb_id, SUM(IF(in_mmm_media = 'Yes', spend, 0)) AS mmm
+      FROM `{view_name('media_bridge')}` GROUP BY 1) b
+FULL JOIN (SELECT imdb_id, SUM(media_spend) AS media FROM `{view_name('media_daily')}`
+           GROUP BY 1) d USING (imdb_id)"""
+
+
 def revenue_sources_check_sql() -> str:
     """Films where US + Canada in dash_revenue_sources differs from Ours in dash_recon by > $1."""
     return f"""
@@ -250,7 +302,8 @@ LEFT JOIN (SELECT imdb_id, SUM(royalty) AS total FROM `{view_name('revenue_sourc
 
 
 VIEWS = {"title": title_sql, "media_daily": media_daily_sql,
-         "revenue_daily": revenue_daily_sql, "comp_mix": comp_mix_sql, "recon": recon_sql}
+         "revenue_daily": revenue_daily_sql, "comp_mix": comp_mix_sql, "recon": recon_sql,
+         "media_bridge": media_bridge_sql}
 TABLES = {"revenue_sources": revenue_sources_sql}     # read the raw tables: saved as tables
 
 
@@ -268,6 +321,13 @@ def run(write: bool = False, client=None) -> list[str]:
         if write:
             client.query(f"CREATE OR REPLACE VIEW `{view_name(short)}` AS {sql}").result()
             lines[-1] = f"SAVED {view_name(short)}  ({len(job.schema)} columns)"
+    if write:
+        chk = list(client.query(media_bridge_check_sql()).result())[0]
+        i = next(i for i, ln in enumerate(lines) if view_name("media_bridge") in ln)
+        same = (f"MMM media = the dashboard's media for all {chk['films']} films"
+                if chk["differ"] == 0 else
+                f"⚠️ MMM media differs from the dashboard's media for {chk['differ']} films")
+        lines[i] = lines[i].rstrip(")") + f"; {same})"
     for short, make in TABLES.items():
         sql = make()
         job = client.query(f"SELECT * FROM ({sql}) LIMIT 1",
