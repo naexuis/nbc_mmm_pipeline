@@ -47,3 +47,14 @@ def test_recon_uses_the_qa_query_and_rules():
     assert f"BETWEEN {Q.RECON_UNDER} AND {Q.RECON_OVER}" in sql
     assert "DATE '2000-01-01'" in sql                              # CHTT placeholder dates
     assert "No US premium window: ours is Canada only" in sql
+
+
+def test_revenue_sources_uses_the_same_window_as_ours():
+    sql = V.revenue_sources_sql()
+    assert "'US'" in sql and "'Canada'" in sql and "UNION ALL" in sql
+    assert "t.est_date IS NULL OR s.day < t.est_date" in sql          # up to EST - 1
+    assert "s.country = 'Canada' OR t.us_premium_window IS NOT FALSE" in sql
+    assert "reported_product_name" in sql and "data_source" in sql
+    assert set(V.TABLES) == {"revenue_sources"}
+    assert "AS std_chtt" in sql and "dash_recon" in sql
+    assert "dash_recon" in V.revenue_sources_check_sql()

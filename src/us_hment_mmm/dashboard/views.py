@@ -20,6 +20,10 @@ Views
                      channel_check (a line for every film) say how much is still unlabelled.
   dash_recon         title: ours (US + Canada premium royalty) vs Finance's CHTT premium revenue,
                      gap, status and date notes; same query and rules as QA 08 Step 9
+  dash_revenue_sources  TABLE (it reads the raw revenue tables, so it is saved, not a view):
+                     film x country x data source x product ID x product name, royalty in the
+                     same window and links as Ours, so US + Canada = Ours for every film;
+                     std_chtt repeats the film's CHTT figure on every row (use MAX)
 
 Usage (from /mnt/UniversalPicturesMMM):
     python -m us_hment_mmm.dashboard.views            # check only: BigQuery validates the SQL
@@ -192,8 +196,62 @@ SELECT imdb_id, INITCAP(title_name) AS title, release_date, INITCAP(distributor)
 FROM s"""
 
 
+def revenue_sources_sql() -> str:
+    """Revenue bridge, one row per film x country x data source x product ID x product name:
+    royalty in the same window and with the same product ID links as "Ours" in dash_recon
+    (US: pre-sales + PVOD to EST - 1, none for films with no US premium window;
+    Canada: pre-sales + PVOD to EST - 1), so US + Canada adds up to Ours for every film."""
+    raw_us = config.table_id(config.DATASET_RAW, config.REVENUE_RAW_TABLE)
+    raw_can = config.table_id(config.DATASET_RAW, config.REVENUE_RAW_TABLE_CAN)
+    exclude = ", ".join(f"'{x}'" for x in config.REVENUE_EXCLUDE_SOURCES) or "''"
+    money = "SAFE_CAST(REPLACE(REPLACE(TRIM(CAST(royalty_total_usd AS STRING)), '$', ''), ',', '') AS FLOAT64)"
+
+    def rows(table: str, country_cd: str, label: str) -> str:
+        return f"""
+  SELECT '{label}' AS country, TRIM(CAST(product_id1 AS STRING)) AS product_id,
+         IFNULL(NULLIF(TRIM(data_source), ''), '(blank)') AS data_source,
+         IFNULL(NULLIF(TRIM(reported_product_name), ''), '(blank)') AS product_name,
+         SAFE.PARSE_DATE('%Y-%m-%d', TRIM(transaction_date)) AS day, {money} AS usd
+  FROM `{table}`
+  WHERE _delivery_date = (SELECT MAX(_delivery_date) FROM `{table}`)
+    AND TRIM(country_cd) = '{country_cd}'
+    AND IFNULL(TRIM(data_source), '') NOT IN ({exclude})"""
+
+    return f"""
+WITH links AS (
+  SELECT DISTINCT TRIM(alias_value) AS product_id, imdb_id FROM `{_core(config.TITLE_ALIAS_TABLE)}`
+  WHERE alias_type = 'revenue_product_id' AND category = 'film' AND imdb_id IS NOT NULL),
+t AS (
+  SELECT imdb_id, title_name, pvod_date, est_date, us_premium_window FROM `{_core(config.TITLE_TABLE)}`
+  WHERE release_date >= DATE '{config.MMM_FIRST_RELEASE_DATE}' AND pvod_date IS NOT NULL),
+s AS ({rows(raw_us, config.REVENUE_COUNTRY, 'US')}
+  UNION ALL{rows(raw_can, 'CAN', 'Canada')}),
+b AS (
+  SELECT t.imdb_id, INITCAP(t.title_name) AS title, t.pvod_date, t.est_date, s.country,
+         s.data_source, s.product_id, s.product_name,
+         SUM(IF(s.day < t.pvod_date, s.usd, 0)) AS presale_royalty,
+         SUM(IF(s.day >= t.pvod_date, s.usd, 0)) AS premium_window_royalty,
+         SUM(s.usd) AS royalty
+  FROM s JOIN links l USING (product_id) JOIN t USING (imdb_id)
+  WHERE (t.est_date IS NULL OR s.day < t.est_date)
+    AND (s.country = 'Canada' OR t.us_premium_window IS NOT FALSE)
+  GROUP BY 1, 2, 3, 4, 5, 6, 7, 8)
+SELECT b.*, r.finance AS std_chtt     -- the film's CHTT figure, the same on every row: use MAX
+FROM b LEFT JOIN (SELECT imdb_id, finance FROM `{view_name('recon')}`) r USING (imdb_id)"""
+
+
+def revenue_sources_check_sql() -> str:
+    """Films where US + Canada in dash_revenue_sources differs from Ours in dash_recon by > $1."""
+    return f"""
+SELECT COUNT(*) AS films, COUNTIF(ABS(IFNULL(b.total, 0) - r.ours) > 1) AS differ
+FROM `{view_name('recon')}` r
+LEFT JOIN (SELECT imdb_id, SUM(royalty) AS total FROM `{view_name('revenue_sources')}`
+           GROUP BY 1) b USING (imdb_id)"""
+
+
 VIEWS = {"title": title_sql, "media_daily": media_daily_sql,
          "revenue_daily": revenue_daily_sql, "comp_mix": comp_mix_sql, "recon": recon_sql}
+TABLES = {"revenue_sources": revenue_sources_sql}     # read the raw tables: saved as tables
 
 
 def run(write: bool = False, client=None) -> list[str]:
@@ -210,6 +268,20 @@ def run(write: bool = False, client=None) -> list[str]:
         if write:
             client.query(f"CREATE OR REPLACE VIEW `{view_name(short)}` AS {sql}").result()
             lines[-1] = f"SAVED {view_name(short)}  ({len(job.schema)} columns)"
+    for short, make in TABLES.items():
+        sql = make()
+        job = client.query(f"SELECT * FROM ({sql}) LIMIT 1",
+                           job_config=bigquery.QueryJobConfig(dry_run=True, use_query_cache=False))
+        lines.append(f"OK    {view_name(short)}  (BigQuery checked the SQL; "
+                     f"{len(job.schema)} columns; table, rebuilt on save)")
+        if write:
+            client.query(f"CREATE OR REPLACE TABLE `{view_name(short)}` CLUSTER BY imdb_id "
+                         f"AS {sql}").result()
+            chk = list(client.query(revenue_sources_check_sql()).result())[0]
+            same = ("US + Canada = Ours on the reconciliation page for all "
+                    f"{chk['films']} films" if chk["differ"] == 0 else
+                    f"⚠️ US + Canada differs from Ours for {chk['differ']} of {chk['films']} films")
+            lines[-1] = f"SAVED {view_name(short)}  ({len(job.schema)} columns; {same})"
     lines.append("Saved." if write else "Check only: nothing was written. To save, add --write.")
     return lines
 
