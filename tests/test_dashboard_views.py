@@ -27,7 +27,7 @@ def test_comp_mix_leaves_unlabelled_spend_out_of_the_mix_and_warns():
 
 
 def test_names():
-    assert set(V.VIEWS) == {"title", "media_daily", "revenue_daily", "comp_mix"}
+    assert set(V.VIEWS) == {"title", "media_daily", "revenue_daily", "comp_mix", "recon"}
     assert V.view_name("title").endswith(".dash_title")
 
 
@@ -35,3 +35,15 @@ def test_notebook_message():
     lines = ["SAVED prj.us_hment_mmm_core.dash_title  (14 columns)", "Saved."]
     md = V.markdown(lines, dry_run=False).data
     assert "SAVED" in md and "`dash_title` 14 columns" in md
+
+
+def test_recon_uses_the_qa_query_and_rules():
+    from us_hment_mmm.qa import summary as Q
+
+    sql = V.recon_sql()
+    assert Q.chtt_sql() in sql                                     # one source of truth
+    for status in (Q.RECON_OK, Q.RECON_CHECK, Q.RECON_OPEN, Q.RECON_NO_FINANCE, Q.RECON_NO_POS):
+        assert f"'{status}'" in sql
+    assert f"BETWEEN {Q.RECON_UNDER} AND {Q.RECON_OVER}" in sql
+    assert "DATE '2000-01-01'" in sql                              # CHTT placeholder dates
+    assert "No US premium window: ours is Canada only" in sql

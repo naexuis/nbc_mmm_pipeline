@@ -18,6 +18,8 @@ Views
                      set of comps share = SUM(spend) / (SUM(labelled_total) / channels shown).
                      "No channel yet" is left out of the mix; no_channel_spend and
                      channel_check (a line for every film) say how much is still unlabelled.
+  dash_recon         title: ours (US + Canada premium royalty) vs Finance's CHTT premium revenue,
+                     gap, status and date notes; same query and rules as QA 08 Step 9
 
 Usage (from /mnt/UniversalPicturesMMM):
     python -m us_hment_mmm.dashboard.views            # check only: BigQuery validates the SQL
@@ -137,8 +139,61 @@ SELECT g.imdb_id, g.title, g.distributor, g.release_date, g.model_channel,
 FROM grid g LEFT JOIN s USING (imdb_id, model_channel)"""
 
 
+def recon_sql() -> str:
+    """CHTT reconciliation, one row per title: QA 08's query (qa.summary.chtt_sql) with the same
+    status rules as qa.summary.recon_frame, so the dashboard and QA 08 always agree."""
+    from us_hment_mmm.qa import summary as Q
+
+    def fin_date(col: str) -> str:
+        d = f"SAFE.PARSE_DATE('%Y-%m-%d', SUBSTR({col}, 1, 10))"
+        return f"IF({d} >= DATE '2000-01-01', {d}, NULL)"   # CHTT placeholder dates (1899-12-30)
+
+    return f"""
+WITH r AS ({Q.chtt_sql()}),
+c AS (
+  SELECT r.*,
+         CAST(IFNULL(r.us_premium, 0) AS FLOAT64) + CAST(IFNULL(r.can_premium, 0) AS FLOAT64) AS ours,
+         CAST(IFNULL(r.finance, 0) AS FLOAT64) AS fin,
+         CAST(IFNULL(r.us_fin_dates, 0) AS FLOAT64)
+           + CAST(IFNULL(r.can_fin_dates, 0) AS FLOAT64) AS ours_fin,
+         {fin_date('r.fin_pvod')} AS finance_pvod, {fin_date('r.fin_est')} AS finance_est
+  FROM r),
+s AS (
+  SELECT c.*, SAFE_DIVIDE(ours - fin, NULLIF(fin, 0)) AS gap_pct,
+         CASE WHEN fin = 0 THEN '{Q.RECON_NO_FINANCE}'
+              WHEN ours = 0 THEN '{Q.RECON_NO_POS}'
+              WHEN est_date IS NULL OR est_date > last_sale THEN '{Q.RECON_OPEN}'
+              WHEN SAFE_DIVIDE(ours - fin, fin) BETWEEN {Q.RECON_UNDER} AND {Q.RECON_OVER}
+                THEN '{Q.RECON_OK}'
+              ELSE '{Q.RECON_CHECK}' END AS status
+  FROM c)
+SELECT imdb_id, INITCAP(title_name) AS title, release_date, INITCAP(distributor) AS distributor,
+       CASE in_mmm WHEN TRUE THEN 'Yes' WHEN FALSE THEN 'No' ELSE 'Not reviewed' END AS in_mmm,
+       IF(us_premium_window IS FALSE, 'No', 'Yes') AS us_premium_window,
+       pvod_date, est_date, finance_pvod, finance_est,
+       CAST(IFNULL(us_premium, 0) AS FLOAT64) AS us_premium,
+       CAST(IFNULL(can_premium, 0) AS FLOAT64) AS can_premium,
+       ours, fin AS finance, ours - fin AS gap, gap_pct,
+       status, IF(status IN ('{Q.RECON_OK}', '{Q.RECON_CHECK}'), 'Yes', 'No') AS compared,
+       ours_fin AS ours_with_finance_est,
+       SAFE_DIVIDE(ours_fin - fin, NULLIF(fin, 0)) AS gap_pct_with_finance_est,
+       ARRAY_TO_STRING(ARRAY(SELECT n FROM UNNEST([
+         IF(us_premium_window IS FALSE, 'No US premium window: ours is Canada only', NULL),
+         IF(finance_pvod IS NOT NULL AND (pvod_date IS NULL OR pvod_date != finance_pvod),
+            FORMAT('Finance PVOD %t (ours %s)', finance_pvod, IFNULL(CAST(pvod_date AS STRING), 'blank')),
+            NULL),
+         IF(finance_est IS NOT NULL AND (est_date IS NULL OR est_date != finance_est),
+            FORMAT('Finance EST %t (ours %s)', finance_est, IFNULL(CAST(est_date AS STRING), 'blank')),
+            NULL)]) AS n WHERE n IS NOT NULL), '; ') AS date_note,
+       IF(est_reason IS NULL, NULL,
+          CONCAT(SUBSTR(est_reason, 1, 90), ' (', IFNULL(est_by, ''), ', ', IFNULL(est_on, ''), ')'))
+         AS est_source,
+       last_sale
+FROM s"""
+
+
 VIEWS = {"title": title_sql, "media_daily": media_daily_sql,
-         "revenue_daily": revenue_daily_sql, "comp_mix": comp_mix_sql}
+         "revenue_daily": revenue_daily_sql, "comp_mix": comp_mix_sql, "recon": recon_sql}
 
 
 def run(write: bool = False, client=None) -> list[str]:
