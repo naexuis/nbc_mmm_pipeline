@@ -240,3 +240,12 @@ LOAD_REGISTRY_TABLE = "load_registry"
 def table_id(dataset: str, table: str) -> str:
     """Return the fully qualified BigQuery table id, e.g. project.dataset.table."""
     return f"{PROJECT_ID}.{dataset}.{table}"
+
+
+# Media plans (Excel, one per film) copied from Planning's Google Drive into GCS; see
+# us_hment_mmm.media.load_plans. Every run reloads every plan in the folder.
+MEDIA_PLAN_BUCKET = "nbcu-marcus-hilliard"
+MEDIA_PLAN_PREFIX = "media_plans/"
+MEDIA_PLAN_TABLE = "media_plan"               # one row per plan (raw dataset)
+MEDIA_PLAN_LINE_TABLE = "media_plan_line"     # one row per plan line
+MEDIA_PLAN_TOTAL_TABLE = "media_plan_total"   # one row per plan total (net media, fees, ...)
