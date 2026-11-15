@@ -10,11 +10,16 @@ Source: gs://<config.MEDIA_PLAN_BUCKET>/<config.MEDIA_PLAN_PREFIX>*.xlsx (e.g. 2
 Good.xlsx). Every run reads every plan in the folder and replaces the tables, so a corrected or
 re-copied plan simply replaces the old one.
 
-Each plan is one sheet: a header block of labelled fields ("Campaign:", "PEW Date:", "EST Date:",
+Most plans are one sheet: a header block of labelled fields ("Campaign:", "PEW Date:", "EST Date:",
 ...) above a table whose header row holds Channel, Publisher, Placement Details, Start Date,
 Planned Spend, Planned Impressions, Pricing Model, ... Column positions differ between years, so
 columns are found by name. Each publisher block ends in a subtotal row ("Roku Total", "Comcast
 SIF Total"); after the last block come the plan totals (NET MEDIA TOTAL, fees, GRAND TOTAL, co-op).
+
+Small titles often have a short plan instead (no plan details table): a 'Title:' and a summary
+table (Platform - Type, Flight, Budget, Est Impressions, Est CPM, Amount Spent, Delivered
+Impressions) with a Total row. Those load as plan_format 'short', one line per summary row.
+A film can have more than one plan (e.g. a PVOD plan and an HE plan).
 
 Tables
   media_plan        one row per plan: file, campaign, dates, line counts, plan totals and a
@@ -48,7 +53,8 @@ from us_hment_mmm import config
 HEADER_FIELDS = {          # header label (lower case, no colon) -> field
     "campaign": "campaign", "pvod release date": "pvod_date", "pew date": "pvod_date",
     "pvod date": "pvod_date", "pew 2 date": "pew2_date", "est street date": "est_date",
-    "est date": "est_date", "bd/dvd street date": "bd_dvd_date", "bd/dvd date": "bd_dvd_date",
+    "est date": "est_date", "pvod street date": "pvod_date", "title": "campaign",
+    "vod start date": "vod_date", "bd/dvd street date": "bd_dvd_date", "bd/dvd date": "bd_dvd_date",
     "vod release date": "vod_date", "vod date": "vod_date", "approval date": "approval_date",
     "genre": "genre", "rating": "rating", "reporting comp": "reporting_comp",
 }
@@ -57,7 +63,8 @@ COLUMNS = {                # table header (lower case) -> field
     "site(s)": "site", "site section": "site_section", "placement details": "placement",
     "targeting": "targeting", "start date": "start_date", "end date": "end_date",
     "planned spend": "planned_spend", "actual spend": "actual_spend",
-    "planned impressions": "planned_impressions", "actual impressions": "actual_impressions",
+    "planned impressions": "planned_impressions", "planned impression": "planned_impressions",
+    "actual impressions": "actual_impressions",
     "pricing model": "pricing_model", "ecpm": "ecpm", "sov": "sov", "platform": "platform",
     "ad unit": "ad_unit", "ad size": "ad_size",
 }
@@ -75,15 +82,18 @@ LINE_SCHEMA = [
     ("actual_spend", "FLOAT64"), ("planned_impressions", "FLOAT64"),
     ("actual_impressions", "FLOAT64"), ("pricing_model", "STRING"), ("ecpm", "FLOAT64"),
     ("sov", "STRING"), ("platform", "STRING"), ("ad_unit", "STRING"), ("ad_size", "STRING"),
-    ("block", "STRING"), ("is_value_added", "BOOL"), ("is_sif", "BOOL"),
+    ("block", "STRING"), ("block_total", "FLOAT64"), ("in_plan_total", "BOOL"),
+    ("outside_reason", "STRING"), ("is_value_added", "BOOL"), ("is_sif", "BOOL"),
     ("stated_value", "FLOAT64"), ("spend_text", "STRING"),
 ]
 PLAN_SCHEMA = [
-    ("plan_file", "STRING"), ("plan_year", "INT64"), ("campaign", "STRING"),
+    ("plan_file", "STRING"), ("plan_year", "INT64"), ("plan_format", "STRING"),
+    ("campaign", "STRING"),
     ("pvod_date", "DATE"), ("pew2_date", "DATE"), ("est_date", "DATE"), ("bd_dvd_date", "DATE"),
     ("vod_date", "DATE"), ("approval_date", "DATE"), ("genre", "STRING"), ("rating", "STRING"),
     ("reporting_comp", "STRING"), ("lines", "INT64"), ("value_added_lines", "INT64"),
     ("sif_lines", "INT64"), ("planned_spend", "FLOAT64"), ("sif_spend", "FLOAT64"),
+    ("outside_total_lines", "INT64"), ("outside_total_spend", "FLOAT64"),
     ("planned_impressions", "FLOAT64"), ("value_added_impressions", "FLOAT64"),
     ("net_media_total", "FLOAT64"), ("co_op_total", "FLOAT64"), ("grand_total", "FLOAT64"),
     ("check_note", "STRING"), ("loaded_at", "TIMESTAMP"),
@@ -132,6 +142,29 @@ def stated_value(*texts) -> float | None:
     return None
 
 
+def header_field(label: str) -> str | None:
+    """Header label -> field, tolerant of wording that changes by year ('PEW Release Date:',
+    'EST/BD Street Date:', 'BD/DVDStreet Date:', 'VOD Start Date:', 'Title:')."""
+    key = _text(label).rstrip(":").strip().lower()
+    if key in HEADER_FIELDS:
+        return HEADER_FIELDS[key]
+    u = key.upper()
+    if "DATE" in u:
+        if "PEW 2" in u or "PEW2" in u:
+            return "pew2_date"
+        if re.match(r"^(PEW|PVOD)\b", u):
+            return "pvod_date"
+        if re.match(r"^EST\b", u):
+            return "est_date"
+        if re.match(r"^(BD|DVD)", u):
+            return "bd_dvd_date"
+        if re.match(r"^VOD\b", u):
+            return "vod_date"
+        if "APPROVAL" in u:
+            return "approval_date"
+    return None
+
+
 def _first_label(row) -> str:
     return next((_text(v) for v in row if _text(v)), "")
 
@@ -143,15 +176,15 @@ def parse_plan(rows: list[tuple], plan_file: str) -> dict:
     if hdr_i is None:
         raise ValueError(f"{plan_file}: no table header row with Channel and Publisher")
 
-    plan = {"plan_file": plan_file}
+    plan = {"plan_file": plan_file, "plan_format": "full"}
     m = re.match(r"^(\d{4})", plan_file.rsplit("/", 1)[-1])
     plan["plan_year"] = int(m.group(1)) if m else None
     for r in rows[:hdr_i]:
         cells = [v for v in r if _text(v)]
         for j, v in enumerate(cells[:-1]):
-            key = _text(v).rstrip(":").strip().lower()
-            if _text(v).endswith(":") and key in HEADER_FIELDS:
-                field, val = HEADER_FIELDS[key], cells[j + 1]
+            field = header_field(v) if _text(v).endswith(":") else None
+            if field:
+                val = cells[j + 1]
                 plan.setdefault(field, _date(val) if field.endswith("_date") else _text(val))
 
     cols = {}
@@ -164,7 +197,8 @@ def parse_plan(rows: list[tuple], plan_file: str) -> dict:
         j = cols.get(f)
         return r[j] if j is not None and j < len(r) else None
 
-    lines, totals, pending, last = [], [], [], {}
+    label_end = cols.get("placement", cols.get("start_date", len(rows[hdr_i])))
+    lines, totals, pending, last, in_footer = [], [], [], {}, False
     for i, r in enumerate(rows[hdr_i + 1:], hdr_i + 2):
         if not any(_text(v) for v in r):
             continue
@@ -172,15 +206,34 @@ def parse_plan(rows: list[tuple], plan_file: str) -> dict:
         placement = _text(get(r, "placement"))
         spend_raw, imps = get(r, "planned_spend"), _number(get(r, "planned_impressions"))
         if not start and not channel and not placement:
-            label = _first_label(r)
-            amount = _number(spend_raw)
-            if label and any(w in label.upper() for w in TOTAL_WORDS):
+            label, amount = _first_label(r), _number(spend_raw)
+            left = _first_label(r[:label_end])            # text left of the placement column
+            if label and (any(w in label.upper() for w in TOTAL_WORDS)
+                          or re.search(r"\bFEES?\b", label.upper())):
                 totals.append({"plan_file": plan_file, "label": label, "amount": amount})
-            elif label:                                   # block subtotal: closes the block
+                in_footer = True
+                continue
+            elif in_footer:
+                continue                                  # below the plan totals: no lines
+            elif left and amount is not None:             # block subtotal: closes the block
                 for ln in pending:
-                    ln["block"] = label
+                    ln["block"], ln["block_total"] = left, amount
+                    ln["block_row"] = i
                 pending = []
-            continue
+                continue
+            elif amount is not None and pending and not any(
+                    _text(v) and _number(v) is None and _date(v) is None for v in r):
+                # an unlabelled subtotal (numbers only): closes the block, named after it
+                name = f"{pending[-1].get('publisher') or 'Block'} (unlabelled subtotal)"
+                for ln in pending:
+                    ln["block"], ln["block_total"], ln["block_row"] = name, amount, i
+                pending = []
+                continue
+            elif not (amount is not None and lines):
+                continue          # ad-unit notes and other text: nothing planned here
+            # else: a continuation row - another targeting of the line above with its own
+            # spend (e.g. Fast X Xbox banners split by audience); it inherits the rest below
+            start = lines[-1]["start_date"]
         if not start and _number(spend_raw) is None and imps is None:
             continue                                      # placeholder row, nothing planned
         ln = {"plan_file": plan_file, "campaign": plan.get("campaign"), "sheet_row": i}
@@ -190,10 +243,14 @@ def parse_plan(rows: list[tuple], plan_file: str) -> dict:
         for f in CARRY:
             if not _text(ln.get(f)) and last.get(f):
                 ln[f] = last[f]
+        if not channel and not placement and lines:          # continuation row
+            for f in ("placement", "pricing_model", "end_date"):
+                if not _text(ln.get(f)):
+                    ln[f] = lines[-1].get(f)
         for f in ("window", "plan_channel", "publisher", "site", "site_section", "placement",
                   "targeting", "pricing_model", "sov", "platform", "ad_unit", "ad_size"):
             ln[f] = _text(ln.get(f)) or None
-        ln["start_date"], ln["end_date"] = start, _date(ln.get("end_date"))
+        ln["start_date"], ln["end_date"] = _date(start), _date(ln.get("end_date"))
         ln["spend_text"] = _text(spend_raw) if _number(spend_raw) is None else None
         for f in ("planned_spend", "actual_spend", "planned_impressions", "actual_impressions",
                   "ecpm"):
@@ -203,7 +260,7 @@ def parse_plan(rows: list[tuple], plan_file: str) -> dict:
             "ADDED VALUE" in (_text(spend_raw).upper() + " " + _text(ln["pricing_model"]).upper())
             or any(AV_START.match(t or "") for t in texts) or stated_value(*texts) is not None)
         ln["stated_value"] = stated_value(*texts)
-        ln["block"] = None
+        ln["block"], ln["block_total"], ln["block_row"] = None, None, None
         last = {f: ln.get(f) for f in CARRY}
         lines.append(ln)
         pending.append(ln)
@@ -211,6 +268,7 @@ def parse_plan(rows: list[tuple], plan_file: str) -> dict:
         ln["line_no"] = k
         ln["is_sif"] = bool(re.search(r"\bSIF\b", f"{ln['publisher'] or ''} {ln['block'] or ''}",
                                       re.I))
+    mark_outside_totals(lines)
 
     def total(*words):
         for t in totals:
@@ -223,6 +281,9 @@ def parse_plan(rows: list[tuple], plan_file: str) -> dict:
     plan["sif_lines"] = sum(ln["is_sif"] for ln in lines)
     plan["planned_spend"] = sum(ln["planned_spend"] or 0 for ln in lines)
     plan["sif_spend"] = sum(ln["planned_spend"] or 0 for ln in lines if ln["is_sif"])
+    plan["outside_total_spend"] = sum(ln["planned_spend"] or 0 for ln in lines
+                                      if not ln["in_plan_total"])
+    plan["outside_total_lines"] = sum(not ln["in_plan_total"] for ln in lines)
     plan["planned_impressions"] = sum(ln["planned_impressions"] or 0 for ln in lines)
     plan["value_added_impressions"] = sum(ln["planned_impressions"] or 0 for ln in lines
                                           if ln["is_value_added"])
@@ -235,39 +296,184 @@ def parse_plan(rows: list[tuple], plan_file: str) -> dict:
     return {"plan": plan, "lines": lines, "totals": totals}
 
 
+def _subset_matching(xs: list[dict], target: float, tol: float = 2.0) -> list[dict] | None:
+    """Lines whose planned spend adds up to target (within tol); small lists only."""
+    from itertools import combinations
+
+    if len(xs) > 18:
+        return None
+    for k in range(1, len(xs) + 1):
+        for combo in combinations(xs, k):
+            if abs(sum(x["planned_spend"] or 0 for x in combo) - target) <= tol:
+                return list(combo)
+    return None
+
+
+def mark_outside_totals(lines: list[dict]) -> None:
+    """Lines the plan keeps out of its own totals. SIF lines (labelled) are always outside.
+    A block whose other lines add up to more than its subtotal row: the lines of one
+    publisher that make up exactly the difference are outside the plan total (on older plans
+    unbilled Comcast lines are not always labelled SIF)."""
+    for ln in lines:
+        ln["in_plan_total"] = not ln["is_sif"]
+        ln["outside_reason"] = "SIF" if ln["is_sif"] else None
+    blocks: dict[tuple, list[dict]] = {}
+    for ln in lines:
+        if ln["block"] is not None:
+            blocks.setdefault((ln["block"], ln["block_row"]), []).append(ln)
+    for (name, _), bl in blocks.items():
+        subtotal = bl[0].get("block_total")
+        inside = [x for x in bl if x["in_plan_total"]]
+        gap = sum(x["planned_spend"] or 0 for x in inside) - (subtotal or 0)
+        if subtotal is None or abs(gap) <= 2 or gap < 0:
+            continue
+        by_pub: dict[str, list[dict]] = {}
+        for x in inside:
+            by_pub.setdefault(_text(x["publisher"]).upper(), []).append(x)
+        for pub, xs in sorted(by_pub.items(), key=lambda kv: "COMCAST" not in kv[0]):
+            hit = _subset_matching(xs, gap)
+            if hit:
+                for x in hit:
+                    x["in_plan_total"] = False
+                    x["outside_reason"] = (f"not in the '{name}' subtotal (block lines "
+                                           f"${gap + subtotal:,.0f} vs subtotal ${subtotal:,.0f})")
+                break
+
+
 def check_note(plan: dict) -> str:
     """Do the lines add up to NET MEDIA TOTAL? SIF is kept out of the plan totals; co-op may
     sit inside a block but outside net media."""
     net = plan.get("net_media_total")
     if net is None:
         return "No NET MEDIA TOTAL found (is the plan complete?)"
-    paid = plan["planned_spend"] - plan["sif_spend"]
-    for label, x in (("lines without SIF", paid),
-                     ("lines without SIF and co-op", paid - (plan.get("co_op_total") or 0))):
-        if abs(x - net) <= 1:
+    outside = plan.get("outside_total_spend", plan.get("sif_spend") or 0)
+    paid = plan["planned_spend"] - outside
+    tol = max(5, 0.0001 * abs(net))                      # rounding inside the plan
+    for label, x in (("lines in the plan total", paid),
+                     ("lines in the plan total, less co-op", paid - (plan.get("co_op_total") or 0))):
+        if abs(x - net) <= tol:
             return f"OK: {label} = NET MEDIA TOTAL"
-    return f"Check: lines without SIF ${paid:,.0f} vs NET MEDIA TOTAL ${net:,.0f}"
+    return f"Check: lines in the plan total ${paid:,.0f} vs NET MEDIA TOTAL ${net:,.0f}"
+
+
+SHORT_COLUMNS = {           # short plans (small titles): one summary table, no plan details
+    "platform - type": "platform_type", "flight": "flight", "budget": "planned_spend",
+    "est impressions": "planned_impressions", "est cpm": "ecpm", "amount spent": "actual_spend",
+    "delivered impressions": "actual_impressions",
+}
+
+
+def _flight(text: str, year: int | None):
+    """'4/28 - 6/05' -> two dates in the plan's year (the end rolls into the next year if
+    it is before the start)."""
+    parts = re.findall(r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?", _text(text))
+    out = []
+    for mo, d, y in parts[:2]:
+        yy = int(y) + (2000 if y and len(y) == 2 else 0) if y else year
+        try:
+            out.append(dt.date(yy, int(mo), int(d)) if yy else None)
+        except ValueError:
+            out.append(None)
+    while len(out) < 2:
+        out.append(None)
+    if out[0] and out[1] and out[1] < out[0] and not parts[1][2]:
+        out[1] = out[1].replace(year=out[1].year + 1)
+    return out[0], out[1]
+
+
+def parse_short_plan(rows: list[tuple], plan_file: str) -> dict:
+    """Short plan used for small titles: 'Title:' and a summary table with Platform - Type,
+    Flight, Budget, Est Impressions, Est CPM, Amount Spent, Delivered Impressions; a 'Total'
+    row. (The audience table below it is not loaded.)"""
+    hdr_i = next((i for i, r in enumerate(rows)
+                  if {"platform - type", "budget"} <= {_text(v).lower() for v in r}), None)
+    if hdr_i is None:
+        raise ValueError(f"{plan_file}: no plan details table and no short-plan summary")
+    plan = {"plan_file": plan_file, "plan_format": "short"}
+    m = re.match(r"^(\d{4})", plan_file.rsplit("/", 1)[-1])
+    plan["plan_year"] = int(m.group(1)) if m else None
+    cols = {SHORT_COLUMNS[_text(v).lower()]: j for j, v in enumerate(rows[hdr_i])
+            if _text(v).lower() in SHORT_COLUMNS}
+    first = min(cols.values())
+    for r in rows[hdr_i:hdr_i + 6]:                 # labels sit left of the summary table
+        cells = [v for v in r[:first] if _text(v)]
+        for j, v in enumerate(cells[:-1]):
+            field = header_field(v) if _text(v).endswith(":") else None
+            if field:
+                val = cells[j + 1]
+                plan.setdefault(field, _date(val) if field.endswith("_date") else _text(val))
+    year = plan.get("pvod_date").year if plan.get("pvod_date") else plan["plan_year"]
+
+    def get(r, f):
+        j = cols.get(f)
+        return r[j] if j is not None and j < len(r) else None
+
+    lines, totals = [], []
+    for i, r in enumerate(rows[hdr_i + 1:], hdr_i + 2):
+        label = _text(get(r, "platform_type"))
+        if not label:
+            if not any(_text(v) for v in r):
+                break                                   # the summary table has ended
+            continue
+        if label.lower() == "total" or any(_text(v).lower() == "total" for v in r[:first + 1]):
+            totals.append({"plan_file": plan_file, "label": "NET MEDIA TOTAL",
+                           "amount": _number(get(r, "planned_spend"))})
+            continue
+        if _number(get(r, "planned_spend")) is None:
+            continue
+        pub, _, kind = label.partition(" - ")
+        start, end = _flight(get(r, "flight"), year)
+        ln = {"plan_file": plan_file, "campaign": plan.get("campaign"), "sheet_row": i,
+              "publisher": pub.strip() or None, "placement": kind.strip() or label,
+              "start_date": start, "end_date": end, "block": None,
+              "is_value_added": False, "is_sif": False, "stated_value": None, "spend_text": None,
+              "block_total": None, "in_plan_total": True, "outside_reason": None}
+        for f in ("planned_spend", "actual_spend", "planned_impressions", "actual_impressions",
+                  "ecpm"):
+            ln[f] = _number(get(r, f))
+        lines.append(ln)
+    for k, ln in enumerate(lines, 1):
+        ln["line_no"] = k
+    plan.update(lines=len(lines), value_added_lines=0, sif_lines=0,
+                planned_spend=sum(ln["planned_spend"] or 0 for ln in lines), sif_spend=0,
+                outside_total_lines=0, outside_total_spend=0,
+                planned_impressions=sum(ln["planned_impressions"] or 0 for ln in lines),
+                value_added_impressions=0,
+                net_media_total=totals[0]["amount"] if totals else None,
+                co_op_total=None, grand_total=None)
+    plan["check_note"] = check_note(plan)
+    return {"plan": plan, "lines": lines, "totals": totals}
 
 
 def read_xlsx(data: bytes, plan_file: str) -> dict:
     from openpyxl import load_workbook
 
     wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
-    last_err = None
-    for ws in wb.worksheets:                    # the plan is on the first sheet with a table
-        try:
-            return parse_plan(list(ws.iter_rows(values_only=True)), plan_file)
-        except ValueError as exc:
-            last_err = exc
-    raise last_err or ValueError(f"{plan_file}: no sheets")
+    sheets = [list(ws.iter_rows(values_only=True)) for ws in wb.worksheets]
+    for parse in (parse_plan, parse_short_plan):    # full plan details first, else short plan
+        for rows in sheets:
+            try:
+                return parse(rows, plan_file)
+            except ValueError:
+                pass
+    raise ValueError(f"{plan_file}: no plan details table and no short-plan summary found")
 
 
 # --- run ------------------------------------------------------------------------------------
 
+def _value(v, kind: str):
+    if v is None:
+        return None
+    if kind == "DATE":
+        d = _date(v)
+        return d.isoformat() if d else None
+    if kind == "TIMESTAMP" and isinstance(v, dt.datetime):
+        return v.isoformat()
+    return v
+
+
 def _rows_for(schema, records):
-    names = [n for n, _ in schema]
-    return [{n: (r.get(n).isoformat() if isinstance(r.get(n), (dt.date, dt.datetime))
-                 else r.get(n)) for n in names} for r in records]
+    return [{n: _value(r.get(n), kind) for n, kind in schema} for r in records]
 
 
 def run(write: bool = False) -> dict:
@@ -309,10 +515,13 @@ def run(write: bool = False) -> dict:
 def summary_frame(result: dict):
     import pandas as pd
 
-    rows = [{"Plan file": p["plan_file"], "Campaign": p.get("campaign"),
+    rows = [{"Plan file": p["plan_file"], "Format": p.get("plan_format"),
+             "Campaign": p.get("campaign"),
              "PVOD": p.get("pvod_date"), "EST": p.get("est_date"), "Lines": p["lines"],
              "Value-added lines": p["value_added_lines"], "SIF lines": p["sif_lines"],
-             "SIF spend": p["sif_spend"], "Net media (plan)": p["net_media_total"],
+             "SIF spend": p["sif_spend"],
+             "Other outside total": p["outside_total_spend"] - p["sif_spend"],
+             "Net media (plan)": p["net_media_total"],
              "Check": p["check_note"]} for p in result["plans"]]
     return pd.DataFrame(rows)
 

@@ -54,3 +54,54 @@ def test_stated_value_and_check():
     assert check_note({"net_media_total": None}).startswith("No NET MEDIA")
     assert check_note({"net_media_total": 100, "planned_spend": 150, "sif_spend": 30,
                        "co_op_total": 20}).startswith("OK")
+
+
+def test_short_plan():
+    from us_hment_mmm.media.load_plans import parse_short_plan, read_xlsx  # noqa: F401
+    rows = [
+        (None, "Title:", "Film Y PVOD", "Platform - Type", "Flight", "Budget", "Est Impressions",
+         "Est CPM", "Benchmarks", "Amount Spent", "Delivered Impressions"),
+        (None, "PVOD Street Date:", D(2023, 7, 11), "FBIG - Vudu", "7/11 - 7/23", 75000, 18750000,
+         4, "Comp", 64998.69, 14478968),
+        (None, "Study", "N/A", "Total", None, 75000, 18750000, 4),
+        (None,) * 6,
+        (None, "Platform", "Type", "Objective"),
+    ]
+    p = parse_short_plan(rows, "2023_Film_Y_PVOD.xlsx")
+    assert p["plan"]["plan_format"] == "short" and p["plan"]["campaign"] == "Film Y PVOD"
+    assert p["plan"]["pvod_date"] == dt.date(2023, 7, 11)
+    (ln,) = p["lines"]
+    assert ln["publisher"] == "FBIG" and ln["placement"] == "Vudu"
+    assert (ln["start_date"], ln["end_date"]) == (dt.date(2023, 7, 11), dt.date(2023, 7, 23))
+    assert ln["planned_spend"] == 75000 and ln["actual_spend"] == 64998.69
+    assert p["plan"]["net_media_total"] == 75000 and p["plan"]["check_note"].startswith("OK")
+
+
+def test_older_layouts():
+    """Targeting rows with their own spend, unlabelled subtotals, Comcast lines left out of
+    the MVPD subtotal, and year-specific header labels."""
+    rows = [
+        (None, "Campaign:", None, "Film Z"),
+        (None, "PEW Release Date:", None, D(2023, 3, 14)),
+        (None, "EST/BD Street Date:", None, D(2023, 4, 14)),
+        (None, "Channel", "Publisher", "Placement Details", "Targeting", "Start Date",
+         "Planned Spend", "Planned Impressions", "Pricing Model"),
+        (None, "CTV/OTT", "Xbox", "Banners", "Fans", D(2023, 3, 14), 10, 100, "CPM"),
+        (None, None, None, None, "Racing games", None, 10, 100, "CPM"),       # another targeting
+        (None, None, "Xbox Total", None, None, None, 20, 200, None),
+        (None, "MVPD", "DirecTV", "Pause Ads", "All", D(2023, 3, 14), 30, 300, "CPM"),
+        (None, "MVPD", "Comcast", "Fixed Banners", "Prime", D(2023, 3, 14), 40, 400, "Flat"),
+        (None, None, "MVPD TOTAL", None, None, None, 30, 300, None),          # Comcast left out
+        (None, "Display", "Bleacher Report", "ROS", "Sports", D(2023, 3, 14), 5, 50, "CPM"),
+        (None, None, None, None, None, None, 5, 50, None),                    # unlabelled sum
+        (None, None, None, None, "Jumbotron Videos"),                         # ad-unit note
+        (None, None, None, None, "NET MEDIA TOTAL", None, 55),
+    ]
+    p = parse_plan(rows, "2023_Film_Z.xlsx")
+    lines = p["lines"]
+    assert p["plan"]["pvod_date"] == dt.date(2023, 3, 14) and p["plan"]["est_date"] == dt.date(2023, 4, 14)
+    assert [ln["publisher"] for ln in lines] == ["Xbox", "Xbox", "DirecTV", "Comcast", "Bleacher Report"]
+    assert lines[1]["targeting"] == "Racing games" and lines[1]["start_date"] == dt.date(2023, 3, 14)
+    assert [ln["in_plan_total"] for ln in lines] == [True, True, True, False, True]
+    assert lines[4]["block"].endswith("(unlabelled subtotal)")
+    assert p["plan"]["check_note"].startswith("OK")
